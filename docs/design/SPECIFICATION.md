@@ -220,7 +220,7 @@ layer, matching the deployment needs of each compositor's partitions without imp
 system-wide choice.
 
 **Verification Expectations:**
-- Pass: The same scenario executes to completion under all three transport modes with
+- Pass: The same configuration executes to completion under all three transport modes with
   identical final state (within floating-point determinism limits) when run on
   a single machine.
 - Pass: Switching transport mode requires only a change to the configuration for the
@@ -773,7 +773,7 @@ events see a snapshot of partition state.
   the subsequent tick see the updated entity set.
 - Pass: Dump requests during a Running state are processed in Phase 1 at a tick boundary;
   all contributed state corresponds to the same completed tick.
-- Pass: The same scenario produces identical results under synchronous, async, and
+- Pass: The same configuration produces identical results under synchronous, async, and
   network transport modes (within floating-point determinism limits).
 - Fail: A partition reads another partition's output from the current tick during
   Phase 2.
@@ -902,7 +902,7 @@ system-level contract crate, these actions are available at every layer — the
 contract-crate dependency graph makes them visible everywhere. Their handlers emit typed
 bus messages (execution state requests) that enter the arbitration pipeline. Encoding
 pause points, safety stops, or phase transitions as event actions keeps the logic
-declarative and configurable in scenario configuration, avoiding hard-coded procedural
+declarative and configurable in composition fragments, avoiding hard-coded procedural
 checks in partition source code. Connecting the event system to the execution state
 request mechanism (FPA-016) ensures all event-driven state changes flow through the same
 arbitration path as UI-initiated changes. Because buses are layer-scoped (FPA-008),
@@ -961,7 +961,7 @@ deployment configurations.
   transport mode; the outcome (Paused) is the same regardless of which is designated.
 - Pass: The orchestrator log for the tick includes both requests and identifies which
   was applied and which was superseded, with partition identities.
-- Pass: The audit log for a given scenario is identical across synchronous, async, and
+- Pass: The audit log for a given configuration is identical across synchronous, async, and
   network transport modes.
 - Fail: Conflicting requests in the same tick produce non-deterministic behavior
   depending on transport mode or thread scheduling.
@@ -1237,7 +1237,7 @@ uniform in kind across all layers. The event primitive is no exception: its mech
 everywhere. But just as the bus carries different typed messages at different layers, and
 contracts specify different behavioral obligations at different layers, events express
 different domain concerns at different layers. Layer 0 events address infrastructure and
-execution lifecycle (telemetry snapshots, health checks, execution state transitions).
+execution lifecycle (output snapshots, health checks, execution state transitions).
 Layer 1 events address domain concerns (phase transitions, failure injection, mode
 changes). Layer 2+ events address sub-component-internal concerns (model transitions,
 convergence thresholds). The event mechanism is the uniform primitive; the action
@@ -1265,11 +1265,11 @@ vocabulary is the layer-scoped semantic content.
 Consistent with the fractal partition pattern (FPA-001), time semantics vary by
 layer: at layer 0 (system level), time-triggered events shall reference wall-clock time
 elapsed since system start; at layer 1 (partition level), time-triggered events shall
-reference scenario time as defined by the system clock.
+reference logical time as defined by the system clock.
 
 **Rationale:** Wall-clock triggers at layer 0 support infrastructure concerns such as
-telemetry snapshots, periodic health checks, and real-time synchronization boundaries
-that are independent of simulation time scaling. Scenario-time triggers at layer 1
+output snapshots, periodic health checks, and real-time synchronization boundaries
+that are independent of logical time scaling. Logical-time triggers at layer 1
 (partition level) support timeline events (e.g., "trigger action at T+120s")
 that must track the system clock, including during time-scaled or paused execution.
 
@@ -1277,10 +1277,10 @@ that must track the system clock, including during time-scaled or paused executi
 - Pass: A layer 0 event configured to trigger at wall-clock T+5s fires at approximately
   5 seconds of real elapsed time, regardless of whether the system is running at 0.5x
   or 2x real-time speed.
-- Pass: A layer 1 event configured to trigger at scenario time T+60s fires when the
+- Pass: A layer 1 event configured to trigger at logical time T+60s fires when the
   system clock reaches 60 seconds, regardless of wall-clock elapsed time.
 - Pass: A layer 1 time-triggered event does not advance while the system is paused.
-- Fail: A scenario-time event fires based on wall-clock time, causing it to trigger at
+- Fail: A logical-time event fires based on wall-clock time, causing it to trigger at
   the wrong phase when time scaling is active.
 
 ---
@@ -1398,7 +1398,7 @@ graph.
 
 **Rationale:** The fractal partition pattern produces a system where events at different
 layers express fundamentally different domain concerns. Layer 0 events address
-infrastructure: execution lifecycle, telemetry checkpoints, periodic health checks.
+infrastructure: execution lifecycle, output checkpoints, periodic health checks.
 Layer 1 events address domain concerns: phase transitions, failure injection, mode
 changes. Layer 2+ events address sub-component-internal concerns: model transitions,
 convergence thresholds, internal mode switches.
@@ -1628,7 +1628,7 @@ do not replace, contract and compositor tests at lower layers.
 - Pass: Every requirement that specifies observable system behavior has at least
   one system test.
 - Pass: System tests use layer 0 composition fragments as input and assert against
-  system outputs (final state, telemetry, event logs) — not against internal
+  system outputs (final state, recorded output, event logs) — not against internal
   partition state.
 - Fail: A system test bypasses the orchestrator or compositor to directly instantiate
   and invoke partition internals.
@@ -1640,7 +1640,7 @@ do not replace, contract and compositor tests at lower layers.
 ### FPA-035 — Transport-parameterized Compositor Tests
 
 **Statement:** Layer 0 compositor tests shall be parameterized over transport mode. The
-same compositor test scenario shall execute under in-process synchronous, asynchronous
+same compositor test configuration shall execute under in-process synchronous, asynchronous
 cross-thread, and network-based transport modes, and shall produce identical final
 state (within floating-point determinism limits as specified in FPA-004).
 
@@ -1652,7 +1652,7 @@ belongs in layer 0 compositor tests. Layer 1 tests are unaware of transport beca
 layer 1 partitions are unaware of transport.
 
 **Verification Expectations:**
-- Pass: A compositor test runs the same scenario under all three transport modes and
+- Pass: A compositor test runs the same configuration under all three transport modes and
   the final state matches across modes within floating-point determinism limits.
 - Pass: The parameterization requires no changes to partition code or partition-level
   test code — only the transport selection in the layer 0 composition fragment
