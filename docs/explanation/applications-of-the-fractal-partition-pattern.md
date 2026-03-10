@@ -3,292 +3,246 @@
 ## Who is this for?
 
 This document is for architects and technical leads evaluating whether the fractal
-partition pattern (FPA) fits their system. It walks through three domains where the
-pattern's properties — uniform structural primitives at every layer, independent
-replaceability, and compositional configuration — solve real problems. The domains are
-different enough to expose which FPA properties matter most in each context, and where
-the pattern's tradeoffs land differently.
-
-The pattern is not domain-specific. It applies wherever a system must be modular at
-multiple scales simultaneously, and where that modularity must be navigable by people
-who don't understand the entire system.
+partition pattern (FPA) fits their system. It describes the class of system that the
+pattern produces, the properties that emerge from it, and the domains where those
+properties are most valuable.
 
 ---
 
-## The recurring problem
+## What kind of system does the pattern produce?
 
-Most large systems need modularity, but they need it at different granularities. A
-rendering engine needs swappable shaders, but also swappable render backends, and
-ideally the engine itself should be embeddable in someone else's application. A robotics
-stack needs swappable sensor processors, but also swappable perception pipelines, and
-the stack as a whole must run identically in simulation and on the real robot.
+The fractal partition pattern is not a domain-specific architecture. It is a structural
+discipline that, when applied, produces a system with a specific set of emergent
+properties. These properties are not features that need to be designed and maintained
+independently — they fall out of the pattern's core constraint: the same structural
+primitives (contracts, compositors, events, composition fragments) apply identically at
+every layer of decomposition.
 
-The typical response is to build different mechanisms at each scale: a plugin system for
-small components, a service interface for medium ones, and an embedding API for the
-system as a whole. Each mechanism has its own conventions for configuration, error
-handling, testing, and documentation. Contributors must learn a new set of abstractions
-at each level. The cognitive cost grows with system depth, and so does the maintenance
-burden.
+Five properties define the class of system that results.
 
-The fractal partition pattern eliminates this by making the structural primitives
-identical at every scale. Contracts, compositors, events, composition fragments, and
-testing structure work the same way whether you're looking at the whole system or a
-sub-component three layers deep. A contributor who understands how things work at one
-layer understands how they work at every layer. The number of concepts stays constant as
-the system grows deeper.
+### Distributable execution
 
-The three domains below all benefit from this, but they stress different aspects of the
-pattern.
+Every partition at every layer communicates through a layer-scoped bus with typed
+messages. The bus abstraction supports multiple transport modes — in-process, async
+cross-thread, and network — selectable per layer by configuration. A partition does not
+know or care which transport mode is active. It reads typed messages from the bus and
+writes typed messages to the bus.
 
----
+This means the system's deployment topology is a configuration choice, not an
+architectural one. The same partition implementations that run in a single process on a
+developer's laptop can run across threads for parallel execution or across machines over
+a network — without code changes. Different layers can use different transport modes
+simultaneously: layer 0 over a network for distributed execution while layer 1 runs
+in-process for low latency.
 
-## Flight and vehicle simulation
+### Hot-swappable functional units
 
-### The challenge
+Every partition at every layer is independently replaceable. This is not a plugin system
+bolted onto an existing architecture — it is the architecture itself. A partition
+conforms to a contract defined at its layer. Any implementation that satisfies the
+contract can be substituted without modifying any peer partition's source code.
 
-A simulation framework must support multiple fidelity levels (simplified models for rapid
-prototyping, high-fidelity models for validation), multiple deployment modes (interactive
-with visualization, headless for batch runs, distributed across machines), and
-contributions from people with varying expertise (students implementing control
-algorithms, researchers adding environment models, operators configuring scenarios).
+The compositor at each layer selects and assembles partition implementations at startup
+based on composition fragments. Changing which implementation is active requires only
+a configuration change. The same mechanism works at every scale: swapping a top-level
+subsystem, swapping a sub-component within a subsystem, or swapping a sub-sub-component
+three layers deep.
 
-Conventional simulation frameworks address these needs with distinct mechanisms:
-configuration files for fidelity selection, plugin APIs for model extension, network
-protocols for distribution, and custom scripting for scenario authoring. Each mechanism
-has its own learning curve.
+Layer-scoped buses ensure that swapping a partition's internal structure is invisible to
+the outer layer. A partition that was monolithic yesterday and is decomposed into three
+sub-partitions today looks identical on the outer bus — the compositor publishes the same
+typed messages regardless of internal structure. This means replaceability holds not just
+for leaf implementations but for entire sub-hierarchies.
 
-### How FPA applies
+### Managed complexity at scale
 
-**Layer 0** decomposes the system into functional domains: physics and plant modeling,
-guidance/navigation/control, visualization, and user interface. Each is an independently
-replaceable partition with contracts defined in a shared contract crate.
+As a system grows, the fractal partition pattern keeps the conceptual footprint constant.
+A contributor working on a sub-component three layers deep encounters the same structural
+primitives as a contributor working at the system level: the same contract/compositor
+structure, the same composition fragment format, the same event schema.
 
-**Layer 1** decomposes each domain further. The physics partition composes atmosphere,
-gravity, aerodynamics, and propulsion as independently replaceable sub-partitions. A
-"fidelity level" is not a special concept — it is a named composition fragment that
-selects a specific set of layer 1 implementations.
+This is qualitatively different from a system that accumulates distinct mechanisms at each
+scale. In such systems, understanding the whole requires learning every mechanism. In an
+FPA system, understanding one layer is understanding every layer. The depth of the system
+can grow — new layers of decomposition can be added where the domain warrants it —
+without increasing the number of concepts a contributor must hold in their head.
 
-**Layer 2+** continues where the domain warrants it. An atmosphere model might compose a
-base atmosphere, a turbulence model, and a wind model.
+Composition fragments provide a unified configuration surface at every scope. The same
+inheritance and override semantics that configure the system at layer 0 also configure
+sub-components at layer 1 and beyond. There is no per-domain configuration mechanism.
+A named fragment at any scope is a portable, version-controllable, shareable artifact
+that can be extended and overridden without forking. State snapshots are also composition
+fragments — a checkpoint captured mid-run is a valid configuration input, loadable,
+inheritable, overridable, and editable with a text editor. A modified checkpoint is an
+`extends` with overrides. State management is not a separate system bolted onto
+configuration — it is configuration, using the same mechanisms as everything else.
 
-The pattern means that a student implementing a control algorithm interacts with the same
-structural primitives (contracts, composition fragments, events) as a researcher adding
-a new physics sub-model or an operator configuring a batch run. Configuration at every
-scope uses the same TOML inheritance and override semantics. Events at every layer use
-the same trigger/action schema. Testing at every layer uses the same contract test /
-compositor test structure.
+### Independent development of connected pieces
 
-Transport independence — the same results across in-process, async, and network modes —
-falls out of the layer-scoped bus design and double-buffered tick lifecycle, enabling
-the same configuration to run interactively on a laptop or distributed across a cluster
-without code changes.
+The contract boundary is the independence boundary. Two partitions at the same layer can
+be developed by different teams, different organizations, or different contributors who
+never communicate — provided both implement against the shared contract. The contract
+crate is the single source of truth for what each side must provide and what each side
+may consume.
 
-### What the pattern primarily solves here
+This independence is structural, not conventional. The compiler enforces that no
+partition imports types or traits from another partition's implementation — only from
+the contract crate. A contributor can develop, test, and validate their partition in
+complete isolation, confident that if it satisfies the contract, it will integrate
+correctly.
 
-**Fidelity without a fidelity system.** The composition fragment mechanism that exists
-for every other purpose also handles fidelity selection. No special-purpose machinery
-is needed.
+The same independence holds at every layer. A team developing a sub-component at layer 1
+depends only on the layer 1 contract defined by their parent partition — not on sibling
+sub-components, not on the layer 0 contract, not on the system as a whole. They can work
+in their own repository, with their own release cadence, and integrate at the contract
+boundary.
 
-**Contributor onboarding.** Students, researchers, and operators all work within the same
-structural primitives. A student who learns how to implement a contract for a control
-algorithm already knows how contract tests work, how composition fragments select their
-implementation, and how events interact with their partition — because those are the
-same constructs at every layer.
+Contract versioning bounds the propagation of changes across these boundaries. When a
+contract changes, the change is expressed as a new version. Implementations targeting
+the previous version remain testable and valid until they choose to migrate. This allows
+independent teams to absorb contract changes on their own schedule.
 
-**Deployment flexibility.** The same partition implementations run interactively,
-headless, or distributed. Transport mode is a configuration choice in the layer 0
-composition fragment.
+### Structural testability
 
----
+If a partition is independently replaceable, it is independently testable. This is not
+a testing strategy bolted onto the architecture — it is a consequence of the partition
+structure. The contract boundary is the isolation boundary: a partition can be
+instantiated, invoked through its contract traits, and verified in isolation without
+its peers. Contract tests are possible because the architecture makes isolation possible.
 
-## Robotics and autonomous systems
+When an alternative implementation is provided — a new vendor's component, a student's
+submission, an experimental algorithm — the existing contract tests apply to it without
+modification. If it passes, it is a valid replacement. Testability scales with the
+system: every new partition or sub-partition automatically has a well-defined test
+surface defined by its contract.
 
-### The challenge
-
-A robotics software stack typically includes perception (sensor fusion, object
-detection), planning (path planning, task planning), control (motor controllers,
-actuator drivers), and operator interface. These domains evolve at different rates —
-perception algorithms change weekly, motor controllers change rarely — and are often
-developed by different teams or sourced from different vendors. The system must also run
-in multiple contexts: on the physical robot, in a software-in-the-loop simulation, and
-in a hardware-in-the-loop test bench.
-
-Existing frameworks (ROS, for example) provide a flat graph of nodes communicating over
-topics. This works well for horizontal communication but does not naturally express
-hierarchical decomposition. A perception stack that internally composes a LiDAR
-processor, a camera processor, and a fusion node looks the same on the topic graph as
-three unrelated nodes. There is no structural distinction between "these three nodes are
-the perception partition" and "these three nodes happen to be running."
-
-### How FPA applies
-
-**Layer 0** partitions the system into perception, planning, control, and operator
-interface. Contracts in the system-level contract crate define the typed messages between
-them: fused world model from perception to planning, trajectory commands from planning
-to control, operator directives from the interface to all partitions.
-
-**Layer 1** decomposes each partition. The perception partition composes LiDAR processing,
-camera processing, and sensor fusion as independently replaceable sub-partitions with
-their own contracts. Each sub-partition can be swapped — a different LiDAR processor for
-a different sensor — without touching camera processing or fusion.
-
-The compositor at each layer owns a layer-scoped bus. The perception compositor publishes
-a fused world model on the layer 0 bus; the internal LiDAR and camera messages stay on
-the layer 1 bus. Replacing the perception partition's internal structure does not change
-the messages visible to planning or control. This is the encapsulation guarantee that a
-flat topic graph does not provide.
-
-Transport independence means the same partition implementations can run in-process on
-the robot, across threads in a simulation, or over a network for remote monitoring —
-selected by configuration, not code changes.
-
-Composition fragments configure the system at every scope. A field deployment fragment
-selects production implementations with real sensor drivers. A simulation fragment
-selects simulated sensor drivers and a physics-based environment. A test bench fragment
-mixes real and simulated components. All use the same override and inheritance
-semantics.
-
-### What the pattern primarily solves here
-
-**Hierarchical encapsulation that flat topic graphs lack.** The layer-scoped bus is the
-key differentiator. In ROS, replacing the perception stack's internal decomposition
-changes the topic graph visible to every other node. In FPA, the layer 1 bus is invisible
-to layer 0 — planning and control see only what the perception compositor publishes on
-the layer 0 bus, regardless of how perception is decomposed internally. This is a
-structural guarantee, not a convention.
-
-**Sim/real configuration as composition.** The difference between running on a physical
-robot and running in simulation is a composition fragment override — swap real sensor
-drivers for simulated ones, swap the motor controller for a simulated actuator model.
-The same inheritance mechanism handles field deployment, simulation, and test bench
-configurations without separate configuration systems for each context.
-
-**Multi-vendor integration.** When perception, planning, and control come from different
-vendors, the contract boundary is the integration boundary. Each vendor implements
-against the contract at their layer. Contract tests verify conformance. Replacing a
-vendor's component requires only that the replacement passes the contract tests.
-
-### How this differs from simulation
-
-Simulation's primary complexity is fidelity management and contributor diversity.
-Robotics' primary complexity is **encapsulation across team and vendor boundaries** and
-**configuration variants across deployment contexts** (real hardware, simulation, test
-bench). The layer-scoped bus and compositor relay — which are useful but not central in
-simulation — become the most important FPA properties in robotics, because they provide
-the hierarchical encapsulation that existing flat frameworks lack.
-
-Transport independence also serves a different purpose. In simulation, it enables
-distributed execution for performance. In robotics, it enables the same code to run
-on-robot (in-process for low latency) and off-robot (network transport for remote
-monitoring or simulation) — a deployment flexibility concern rather than a performance
-concern.
+The same structure produces a natural testing pyramid. Contract tests verify individual
+partitions in isolation (many, fast). Compositor tests verify that the compositor
+correctly assembles partitions and that they interact through their contracts (fewer,
+slower). System tests verify end-to-end properties (few, slowest). This pyramid is not
+designed independently — it mirrors the layer structure.
 
 ---
 
-## Game engines and interactive applications
+## Where these properties converge
 
-### The challenge
+The five properties above are independently useful, but their value compounds when a
+system needs all of them at once. A system that must distribute execution across machines
+*and* swap functional units *and* remain navigable as it grows *and* support independent
+teams developing against shared interfaces *and* remain testable at every layer — that
+system is paying for five separate architectural concerns. In a fractal partition system,
+these are not five separate concerns. They are five consequences of one structural
+discipline.
 
-A game engine composes rendering, physics, audio, input handling, networking, and game
-logic. Each domain has its own internal complexity — the renderer composes a scene graph,
-material system, lighting pipeline, and post-processing chain. Modders and content
-creators need to replace or extend functionality at multiple scales: a new shader, a new
-rendering backend, a new physics solver, or a total conversion that replaces game logic
-entirely.
+This convergence is what makes the pattern particularly well suited to a family of
+domains that share a common shape: heterogeneous functional domains that must interact
+through well-defined interfaces, operate across varying deployment topologies, support
+substitution of components at multiple scales, and remain tractable as they grow in depth
+and contributor count.
 
-Existing engines typically provide a plugin or extension API at one or two scales, with
-different mechanisms at each. Unity's component system works at the entity level but
-engine subsystem replacement requires source access. Unreal's module system works at the
-subsystem level but has different conventions than its Blueprint scripting system.
+### Simulation systems
 
-### How FPA applies
+Simulation systems — flight simulation, vehicle dynamics, multi-body physics, training
+platforms — compose physics modeling, control algorithms, environment models,
+visualization, and operator interfaces. They must run interactively on a workstation,
+headless in a batch farm, or distributed across a cluster. They must support fidelity
+selection (swapping simplified models for high-fidelity ones), contributor diversity
+(students, researchers, and operators working at different layers), and multi-vendor
+integration (a third-party physics engine alongside an in-house control system).
 
-**Layer 0** partitions the engine into rendering, physics, audio, input, networking, and
-game logic. Each is independently replaceable — a different physics engine can be
-substituted by providing a new implementation of the physics contract.
+These are not separate requirements needing separate solutions. Fidelity selection is
+hot-swappable functional units — a named composition fragment selects which sub-model
+implementations are active. Batch and distributed execution is distributable execution —
+transport mode is a configuration choice. Contributor diversity is managed complexity —
+everyone works with the same structural primitives regardless of which layer they touch.
+Multi-vendor integration is independent development — each vendor implements against the
+contract at their layer. And when a student submits a new control algorithm, the existing
+contract tests verify it without custom test effort — structural testability.
 
-**Layer 1** decomposes each domain. The rendering partition composes scene management,
-material processing, lighting, and post-processing. Each is independently replaceable,
-enabling a modder to replace the lighting pipeline without touching materials or
-post-processing.
+### Cyber-physical systems
 
-The compositor at each layer manages execution ordering and inter-partition data flow.
-The tick lifecycle ensures deterministic behavior: all partitions read from the previous
-tick's outputs and write to the current tick's buffers. This eliminates the ordering
-sensitivity that plagues many game engines (where the behavior changes depending on which
-system runs first).
+Cyber-physical systems — robotics, autonomous vehicles, hardware-in-the-loop test
+platforms, drones — compose software that operates across the boundary between
+computation and the physical world. The same software must run on the real platform, in
+a software-in-the-loop simulation, and on a hardware-in-the-loop test bench. Components
+come from different vendors and evolve on different schedules. The system must be
+navigable by teams spanning mechanical engineering, electrical engineering, control
+theory, and software engineering.
 
-Composition fragments serve as the configuration surface at every scope. A game's
-configuration is a layer 0 fragment selecting which partitions and presets to use. A
-mod is a composition fragment that extends the base configuration and overrides specific
-partitions or sub-partitions. A graphics preset is a named layer 1 fragment within the
-rendering partition. All use the same inheritance and override semantics.
+The boundary between real and simulated is a partition swap — a real sensor driver
+replaced with a simulated sensor model, a real actuator controller replaced with a
+simulated plant. The system does not distinguish between "real" and "simulated" — it
+composes whatever implementations the composition fragment selects. A test bench that
+mixes real and simulated components is just another configuration. On the real platform,
+partitions run in-process for minimal latency; in a distributed test setup, they run over
+a network. The same code, the same contracts, the same tests — the contract tests that
+verify a component in simulation verify it on the real platform, because the contract
+boundary is the same.
 
-### What the pattern primarily solves here
+### Game engines and interactive applications
 
-**Deterministic execution without manual ordering.** The double-buffered tick lifecycle
-is the key differentiator. Game engines are notorious for subtle bugs caused by system
-execution order — physics reading input state that hasn't been updated yet, rendering
-reading physics state mid-integration. The FPA tick lifecycle eliminates this entire
-class of bugs by construction: every partition reads the previous tick's outputs, period.
-The result is the same regardless of which partition steps first.
+Game engines compose rendering, physics, audio, input handling, networking, and game
+logic, each with deep internal structure. They must support extension by engine
+developers, studio teams, and end-user modders — all at different scales. A modder
+replaces the lighting pipeline. A studio replaces the physics engine. A user selects a
+graphics preset. These are the same operation at different layers, expressed through
+composition fragments.
 
-**Mods as composition fragments.** A mod is not a special concept requiring a mod API —
-it is a composition fragment that extends the base configuration and overrides specific
-partitions or sub-partitions. A total conversion overrides layer 0 partitions. A graphics
-mod overrides layer 1 rendering sub-partitions. A configuration tweak overrides
-individual parameters. All use the same inheritance and override semantics, and the
-engine doesn't need to distinguish between "a mod" and "a configuration variant."
-
-**Multi-scale extensibility with one mechanism.** Existing engines offer different
-extension mechanisms at different scales (entity components vs. engine modules vs.
-scripting). FPA provides one mechanism — contract-conforming partition implementations —
-at every scale. A new shader is a layer 2 implementation within the material
-sub-partition. A new rendering backend is a layer 1 implementation within the rendering
-partition. A new physics engine is a layer 0 implementation. The contributor learns one
-set of concepts.
-
-### How this differs from simulation and robotics
-
-The tick lifecycle matters in all three domains, but in game engines it solves a problem
-that is **chronic and pervasive** — ordering sensitivity affects virtually every
-inter-system interaction, every frame. In simulation, ordering sensitivity exists but is
-typically managed by the physics integrator's structure. In robotics, real-time
-constraints often dictate execution order explicitly.
-
-Composition fragments serve different roles across the three domains. In simulation, they
-primarily manage fidelity and contributor configurations. In robotics, they primarily
-manage deployment context (real vs. simulated hardware). In game engines, they primarily
-serve as the **modding and user configuration surface** — the mechanism by which end
-users (not just developers) customize the system. This is a different audience with
-different expectations, and the fact that composition fragments are human-readable,
-inheritable, and overridable at every scope maps well to the modding use case.
-
-The event system also serves a distinct role. In simulation, events drive mission
-timelines (staging, failure injection). In robotics, events drive operational responses
-(fault handling, mode transitions). In game engines, events drive **gameplay logic** —
-a condition-triggered event that spawns enemies when the player enters a region, a
-time-triggered event that changes the weather. The event mechanism is the same; the
-vocabulary and the audience authoring events are fundamentally different.
+Mods, presets, and total conversions are all composition fragments with the same
+inheritance and override semantics. There is no separate mod API, no separate plugin
+system, no separate preset mechanism — the architecture *is* the extension system. And
+when a modder submits a new rendering sub-partition, the existing contract tests verify
+that it conforms to the rendering contract without the engine team writing mod-specific
+tests.
 
 ---
 
-## Choosing which FPA properties matter for your domain
+## Conventions that complement the pattern
 
-The three domains above highlight that while FPA provides the same structural primitives
-everywhere, different domains lean on different subsets:
+The emergent properties above follow from the pattern's structural primitives alone. In
+practice, FPA systems benefit from additional conventions that are not inherent to the
+pattern but fit naturally within it. These conventions are documented separately:
 
-| Property | Simulation | Robotics | Game Engines |
-|---|---|---|---|
-| Composition fragments | Fidelity selection, contributor config | Deployment context (real/sim/test) | Mods, user presets |
-| Layer-scoped bus | Useful for encapsulation | **Critical** — hierarchical encapsulation flat frameworks lack | Useful for encapsulation |
-| Tick lifecycle | Important for reproducibility | Important for real-time correctness | **Critical** — eliminates ordering sensitivity |
-| Transport independence | Distributed execution for performance | Same code on-robot and in simulation | Less central (typically in-process) |
-| Events | Mission timelines | Operational fault handling | Gameplay logic |
-| Contract tests | Verifying student/researcher contributions | Verifying multi-vendor integration | Verifying mod compatibility |
+- **[Tick Lifecycle and Synchronization](tick-lifecycle-and-synchronization.md):**
+  A double-buffered execution model where every partition reads the previous tick's
+  outputs and writes to the current tick's buffers. This convention, layered onto FPA's
+  bus and compositor structure, produces deterministic reproducibility (results are
+  identical regardless of partition execution order) and makes concurrent and distributed
+  execution safe by eliminating ordering sensitivity. It is a design choice — not a
+  consequence of the pattern — but it leverages the pattern's layer-scoped buses and
+  compositor-driven execution to powerful effect.
 
-The pattern earns its keep in systems that are heterogeneous, hierarchical, and must
-support independent work at multiple scales simultaneously. If your system's primary
-challenge appears in one of the rows above, the corresponding domain example shows how
-FPA addresses it. If your system's challenges span multiple rows, the pattern addresses
-them with the same set of primitives — that is the point.
+- **[Testing in the Fractal Partition Pattern](testing-in-the-fractal-partition-pattern.md):**
+  A testing methodology (contract tests, compositor tests, system tests) and a
+  traceability discipline (Diataxis documentation, bidirectional requirement tracing,
+  test files named by requirement). The testing *pyramid* emerges from the partition
+  structure, but the specific methodology and traceability practices are conventions
+  that the structure supports well.
+
+---
+
+## When the pattern is not the right fit
+
+The fractal partition pattern carries structural overhead: contracts, compositors,
+layer-scoped buses, and composition fragments. This overhead is justified when the system
+is heterogeneous, hierarchical, and must support independent work at multiple scales.
+
+It is less justified when:
+
+- **The system is flat.** If all components are peers at a single level with no
+  meaningful hierarchical decomposition, the layer machinery adds cost without benefit.
+  A flat plugin architecture may be simpler and sufficient.
+
+- **The system is small.** If the entire system can be understood by one person and
+  rarely changes, the independence guarantees are solving a problem that doesn't exist.
+
+- **Performance dominates structure.** If the system's primary constraint is raw
+  throughput and every abstraction boundary is a potential bottleneck, the bus abstraction
+  and compositor indirection may be unacceptable. The pattern is designed for systems
+  where correctness, modularity, and development scalability are at least as important as
+  raw performance.
+
+- **The domain is truly homogeneous.** If every component is the same kind of thing (a
+  collection of identical workers, a uniform pipeline of identical stages), the
+  partition/contract/compositor structure adds unnecessary differentiation. A simpler
+  model — a pool, a chain, a dataflow graph — may be a better fit.
