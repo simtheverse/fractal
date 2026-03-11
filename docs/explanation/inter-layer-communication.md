@@ -76,13 +76,15 @@ The compositor drives execution by calling trait methods on each partition:
 - `contribute_state()` — request a state snapshot contribution
 - `load_state(fragment)` — restore state from a snapshot fragment
 
-These are imperative, sequential operations. The compositor controls the order in which
-partitions step, enforces tick boundaries, and manages the partition lifecycle. This
-requires call-and-return semantics — the compositor calls one partition at a time and
-waits for completion before proceeding.
+These are imperative operations. The compositor coordinates partition execution and
+manages the partition lifecycle. The invocation mechanism — direct method calls,
+message-based dispatch, or remote procedure calls — is implementation-defined. Under
+synchronous execution, this takes the form of call-and-return semantics. Under async or
+distributed execution, the compositor may use message-based dispatch with completion
+tracking.
 
-Trait calls are the mechanism for control flow that must be ordered. The compositor
-decides which partition steps first, when to collect state, and when to shut down.
+Lifecycle invocations are the mechanism for control flow that must be coordinated. The
+compositor decides when partitions execute, when to collect state, and when to shut down.
 
 ### Bus broadcast for shared context
 
@@ -159,8 +161,8 @@ automatic forwarding — the compositor has full authority over what crosses its
 boundary.
 
 Because each compositor processes its inner bus during its own `step()` and relays on
-the next outer-bus read cycle, a request emitted at layer N may take up to N ticks to
-reach the orchestrator. This latency is acceptable for normal execution state
+the next outer-bus read cycle, a request emitted at layer N may take up to N processing cycles to
+reach the orchestrator (under tick-based execution, up to N ticks). This latency is acceptable for normal execution state
 transitions. Safety-critical signals that cannot tolerate relay latency use the direct
 signal mechanism, which bypasses the relay chain entirely.
 
@@ -364,8 +366,11 @@ a bus concern. There is no fault-specific infrastructure.
 
 ### The compositor's responsibility
 
-The compositor calls `step()` on each sub-partition. If a sub-partition returns an error,
-the compositor decides the response:
+Fault handling is one of several compositor roles described in
+[The Compositor in the Fractal Partition Pattern](the-compositor-in-the-fractal-partition-pattern.md).
+
+When a sub-partition faults (detected via a failed call, a missed heartbeat, or a
+disconnection depending on the execution strategy), the compositor decides the response:
 
 - **Emit a stop request.** The compositor emits a stop request on its bus (which may
   then be relayed to the outer layer through the normal relay chain). The outer layer
@@ -466,10 +471,9 @@ safety mechanisms independently.
 
 The inter-layer communication architecture defines *what* is communicated and *who*
 has authority over it, but does not by itself determine *when* messages become visible
-to other partitions. The compositor tick lifecycle (FPA-014) fills this gap: it
-defines a three-phase execution model with double-buffered message isolation, tick
-barriers for shared state assembly, and direct signal polling between partition steps.
-Without this lifecycle, different transport modes could make different visibility
+to other partitions. The compositor tick lifecycle convention (FPA-014) is one approach to filling this gap: it
+defines a three-phase execution model with double-buffered message isolation, cycle barriers for shared state assembly, and direct signal polling between partition steps.
+Without an explicit synchronization strategy, different transport modes could make different visibility
 choices, violating transport independence. See the
 [tick lifecycle and synchronization](tick-lifecycle-and-synchronization.md) explainer
 for full details.

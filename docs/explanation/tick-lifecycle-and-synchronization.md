@@ -1,8 +1,14 @@
 # The Tick Lifecycle and Synchronization Model
 
 This document explains the compositor tick lifecycle (FPA-014) and bus delivery
-semantics (FPA-007) — the synchronization model that ensures transport-independent
-system behavior.
+semantics (FPA-007) — a synchronization convention that ensures
+transport-independent, deterministic system behavior.
+
+The FPA core architecture permits any execution strategy — lock-step ticks,
+multi-rate scheduling, or fully asynchronous processing with partitions on
+separate processes, cores, or compute nodes. The tick lifecycle described here is
+one specific strategy, defined as a convention in FPA-CON-000, that systems adopt
+when deterministic reproducibility is required.
 
 ## The Problem: When Is Communication Visible?
 
@@ -29,7 +35,7 @@ precise rules about when messages are visible.
 
 *Specified in FPA-014.*
 
-Every compositor — at every layer — executes each tick as three sequential phases:
+Under the tick lifecycle convention, every compositor — at every layer — executes each tick as three sequential phases:
 
 ```
                          TICK N
@@ -217,13 +223,16 @@ runtime role (FPA-009) with precise timing semantics. It integrates with:
   sub-tick latency while avoiding reentrancy hazards.
 - **Recursive state contribution** (FPA-012): The tick boundary in Phase 1 ensures
   that `contribute_state()` calls observe consistent, completed state.
-- **Compositor fault handling** (FPA-011): Faults during any trait call in any
+- **Compositor fault handling** (FPA-011): Faults during any lifecycle invocation in any
   phase are caught by the compositor, wrapped with diagnostic context, and propagated
   upward — the compositor does not silently absorb failures.
-- **Transport abstraction** (FPA-004): The lifecycle is the mechanism that makes
-  the transport independence guarantee enforceable — by isolating partitions from
-  each other's current-tick outputs, the result becomes independent of step order and
-  timing, which is what varies across transport modes.
+- **Transport abstraction** (FPA-004): The tick lifecycle is one mechanism that
+  makes the transport independence guarantee enforceable for tick-based systems —
+  by isolating partitions from each other's current-tick outputs, the result
+  becomes independent of step order and timing, which is what varies across
+  transport modes. Systems using other execution strategies must provide their own
+  mechanism for ensuring transport-independent results when transport independence
+  is required.
 
 ## Cross-Reference
 

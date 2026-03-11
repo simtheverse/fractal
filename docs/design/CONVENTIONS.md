@@ -41,7 +41,9 @@ defined here:
 The conventions are grouped into two areas:
 
 - **Tick lifecycle** (FPA-014): A double-buffered execution model that produces
-  deterministic, ordering-insensitive results. See the companion explanation:
+  deterministic, ordering-insensitive results. This is one of several valid execution
+  strategies; the core architecture does not mandate tick-based execution. See the
+  companion explanation:
   [Tick Lifecycle and Synchronization](../explanation/tick-lifecycle-and-synchronization.md).
 
 - **Verification and testing discipline** (FPA-030 through FPA-039): A testing
@@ -55,15 +57,26 @@ The conventions are grouped into two areas:
 
 ## 2. Tick Lifecycle
 
+The core architecture (FPA-SRS-000) permits any execution strategy — lock-step ticks,
+multi-rate execution, or fully asynchronous processing with partitions on separate
+processes, cores, or compute nodes — provided the chosen strategy satisfies the core
+communication, fault handling, and transport requirements. The tick lifecycle convention
+defined below is a specific strategy that produces deterministic reproducibility and
+ordering-insensitive results. Systems that require synchronized, deterministic execution
+(e.g., flight simulation, physics modeling) adopt this convention. Systems that prioritize
+throughput, latency, or event-driven responsiveness may use a different execution strategy
+while remaining FPA-conforming.
+
 ---
 
 ### FPA-014 — Compositor Tick Lifecycle
 
-**Statement:** The compositor at each layer shall execute each tick as a
-three-phase lifecycle. All transport modes shall enforce this lifecycle identically. A
-partition that is itself a compositor shall execute its own complete three-phase tick
-lifecycle within the outer compositor's Phase 2 `step()` call for that partition —
-the fractal structure nests tick lifecycles recursively.
+**Statement:** When a system adopts the tick lifecycle convention, the compositor at each
+layer shall execute each processing cycle as a three-phase lifecycle. All transport modes
+shall enforce this lifecycle identically. A partition that is itself a compositor shall
+execute its own complete three-phase tick lifecycle within the outer compositor's Phase 2
+`step()` call for that partition — the fractal structure nests tick lifecycles
+recursively.
 
 **Phase 1 — Pre-tick processing (between tick N-1 and tick N):**
 
@@ -182,7 +195,13 @@ only the order in which their actions are applied. This is consistent with the
 double-buffered approach — just as partitions see a snapshot of inter-partition data,
 events see a snapshot of partition state.
 
-**Verification Expectations:**
+Systems that do not require deterministic reproducibility — or that operate in fully
+asynchronous, event-driven, or multi-rate modes — may use different execution strategies
+while remaining FPA-conforming. The core architecture requires only that the compositor
+coordinates partition lifecycle, owns the bus, arbitrates requests, and handles faults
+(FPA-009, FPA-011). How it schedules partition execution is an implementation choice.
+
+**Verification Expectations (applicable when the tick lifecycle convention is adopted):**
 - Pass: Two partitions exchanging data via the bus produce identical results
   regardless of step order, when the step order is varied between test runs.
 - Pass: A message published by partition A during tick N is not visible to partition B

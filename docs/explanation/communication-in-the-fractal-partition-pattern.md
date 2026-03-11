@@ -129,7 +129,11 @@ to a partition that is monolithic. The bus boundary matches the contract boundar
 
 ## The compositor's dual role
 
-The compositor has two communication roles that operate simultaneously:
+The compositor's communication roles are part of its broader set of responsibilities —
+assembly, lifecycle authority, bus ownership, arbitration, relay, fault handling, and
+strategy adaptation. For the complete picture, see
+[The Compositor in the Fractal Partition Pattern](the-compositor-in-the-fractal-partition-pattern.md).
+The two communication roles that are most relevant here operate simultaneously:
 
 1. **Bus owner for its layer.** It creates the bus, connects partitions, publishes
    shared context (shared state, execution state), and receives requests. In this role it
@@ -165,13 +169,15 @@ data flow, and the relay gives compositors a natural point to apply policy.
 
 A fully uniform system would use the bus for everything — lifecycle control, data flow,
 requests — in both directions. But the compositor-partition relationship is inherently
-asymmetric. The compositor must control execution order (which partition steps first),
-enforce tick boundaries, and manage partition lifecycle. These are imperative operations
-that require call-and-return semantics, not publish-subscribe.
+asymmetric. The compositor must coordinate execution and manage the partition lifecycle.
+Under the tick lifecycle convention (FPA-014), this includes enforcing tick boundaries
+and controlling step order. These are imperative operations that require call-and-return
+semantics, not publish-subscribe.
 
 The principled split is: **trait calls for imperative control, bus for data flow and
-requests.** This matches the nature of each communication type. Lifecycle control is
-sequential and targeted (the compositor calls one partition at a time). Data flow and
+requests.** This matches the nature of each communication type. Lifecycle control is targeted and coordinated by the compositor (the specific
+dispatch mechanism — synchronous calls, async dispatch, remote invocation — depends on
+the execution strategy and transport mode). Data flow and
 requests are broadcast and decoupled (any partition can publish, any can subscribe).
 
 ### Why compositor authority over transparent relay

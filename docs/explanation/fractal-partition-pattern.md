@@ -185,6 +185,14 @@ communication, and points to the two detailed companion documents:
   relay, compositor relay authority, recursive state contributions, fault handling, and
   direct signals.
 
+- [The Compositor in the Fractal Partition Pattern](the-compositor-in-the-fractal-partition-pattern.md) —
+  all compositor roles in one place: assembly, lifecycle authority, bus ownership,
+  arbitration, relay, fault handling, and strategy adaptation.
+
+- [Execution Strategies in the Fractal Partition Pattern](execution-strategies-in-the-fractal-partition-pattern.md) —
+  direct invocation, multi-rate, supervisory coordination, and how different strategies
+  compose across layers.
+
 ### Events
 
 The event summary above describes a system where the mechanism is uniform but the

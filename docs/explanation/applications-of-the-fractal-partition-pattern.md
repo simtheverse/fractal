@@ -31,8 +31,8 @@ writes typed messages to the bus.
 
 This means the system's deployment topology is a configuration choice, not an
 architectural one. The same partition implementations that run in a single process on a
-developer's laptop can run across threads for parallel execution or across machines over
-a network — without code changes. Different layers can use different transport modes
+developer's laptop can run across threads for parallel execution, across separate processes on the same
+machine, or across machines over a network — without code changes. Different layers can use different transport modes
 simultaneously: layer 0 over a network for distributed execution while layer 1 runs
 in-process for low latency.
 
@@ -211,7 +211,9 @@ pattern but fit naturally within it. These conventions are documented separately
   identical regardless of partition execution order) and makes concurrent and distributed
   execution safe by eliminating ordering sensitivity. It is a design choice — not a
   consequence of the pattern — but it leverages the pattern's layer-scoped buses and
-  compositor-driven execution to powerful effect.
+  compositor-driven execution to powerful effect. The core architecture does not mandate
+  tick-based execution; systems may use multi-rate, fully asynchronous, or other execution
+  strategies while remaining FPA-conforming.
 
 - **[Testing in the Fractal Partition Pattern](testing-in-the-fractal-partition-pattern.md):**
   A testing methodology (contract tests, compositor tests, system tests) and a

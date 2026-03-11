@@ -83,8 +83,10 @@ tick.
 
 The pattern's structural primitives — layer-scoped buses, typed messages, compositors
 that drive partition execution — do not mandate double-buffered ticks. An FPA-conforming
-system could use immediate message visibility, or event-driven execution without a fixed
-tick, or a different synchronization model entirely. The tick lifecycle is a specific
+system could use immediate message visibility, multi-rate execution with partitions
+running at independent frequencies, fully asynchronous event-driven processing with
+partitions on separate processes or compute nodes, or a different synchronization model
+entirely. The tick lifecycle is a specific
 execution model that *leverages* the compositor's control over partition execution and the
 bus's message routing to achieve determinism. It is a powerful choice, but it is a choice.
 
@@ -95,6 +97,13 @@ companion explanation document
 [Tick Lifecycle and Synchronization](tick-lifecycle-and-synchronization.md) develops the
 design rationale, the concurrency model, and the interaction with direct signals and
 event evaluation.
+
+The core architecture's flexibility about execution strategy means that FPA-conforming
+systems can range from lock-step simulations with in-process trait calls to fully
+distributed pipelines with partitions on separate compute nodes. The tick lifecycle is
+the right choice when deterministic reproducibility is required; other strategies may be
+more appropriate when throughput, latency, or event-driven responsiveness are the primary
+concerns.
 
 ---
 

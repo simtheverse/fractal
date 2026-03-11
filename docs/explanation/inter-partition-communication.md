@@ -87,8 +87,9 @@ partition logic cannot depend on timing assumptions, message ordering quirks, or
 transport-specific side effects. If a scenario produces different results under different
 transports, something is wrong with the partition logic, not the transport.
 
-Two additional mechanisms make this constraint enforceable in practice. The compositor
-tick lifecycle (FPA-014) defines a double-buffered execution model: within a single
+Two additional mechanisms make this constraint enforceable in practice. One
+well-defined approach to enforcing this constraint is the compositor tick lifecycle
+convention (FPA-014), which defines a double-buffered execution model: within a single
 tick, all partitions read from the previous tick's outputs and write to the current
 tick's buffer. No partition sees another partition's current-tick output, so the result
 is independent of step order — which is what varies across transport modes. Bus delivery

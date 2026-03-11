@@ -65,6 +65,8 @@ worked examples for the patterns defined in this specification:
 - `communication-in-the-fractal-partition-pattern.md`
 - `inter-partition-communication.md`
 - `inter-layer-communication.md`
+- `the-compositor-in-the-fractal-partition-pattern.md`
+- `execution-strategies-in-the-fractal-partition-pattern.md`
 - `events-as-a-fractal-primitive.md`
 - `testing-in-the-fractal-partition-pattern.md`
 - `test-reference-data-in-the-fractal-partition-pattern.md`
@@ -78,7 +80,7 @@ worked examples for the patterns defined in this specification:
 
 | Term              | Definition                                                                 |
 |-------------------|----------------------------------------------------------------------------|
-| Compositor        | A component that selects and assembles partition implementations at startup and, at runtime, owns the layer's bus instance, drives partition execution via trait calls, publishes shared context on the bus, arbitrates requests, and relays inter-layer messages to the outer bus with authority to filter, transform, or suppress |
+| Compositor        | A component that selects and assembles partition implementations at startup and, at runtime, owns the layer's bus instance, coordinates partition execution (ranging from direct invocation of lifecycle methods to supervisory coordination of self-scheduling partitions), publishes shared context on the bus, arbitrates requests, and relays inter-layer messages to the outer bus with authority to filter, transform, or suppress. The compositor is always the lifecycle authority regardless of execution strategy |
 | Contract crate    | A module or package that defines traits and data types but contains no implementation. Named `<partition>-contract` or `<system>-contract` by convention (see FPA-040). In a Rust realization, this is a Rust crate; other technologies may use equivalent constructs. Each contract crate maintains a `docs/design/SPECIFICATION.md` serving as its Interface Control Document (ICD) |
 | Composition fragment | A configuration block — inline or named — that selects partition implementations at a given scope within the fractal structure. A top-level composition fragment at layer 0 selects system-wide parameters. A composition fragment at layer 1 selects partition-level parameters. All composition fragments share the same override and inheritance semantics (see FPA-020, FPA-021) |
 | Delivery semantic | A per-message-type specification of how the bus delivers messages to consumers. Latest-value retains only the most recent value (suitable for continuous state). Queued retains all messages in order (suitable for requests that must not be dropped). Declared in the contract crate alongside the type. See FPA-007 |
@@ -91,7 +93,7 @@ worked examples for the patterns defined in this specification:
 | Partition         | A functional subdivision of the system at a given layer. At layer 0, the top-level partitions defined by the domain-specific system specification. At layer 1, sub-components within a partition (e.g., sub-models, sub-services). Each partition is independently replaceable provided it conforms to its layer's interface contracts |
 | Relay authority   | The compositor's right to decide whether a message received on its inner bus is forwarded to the outer bus. The compositor may relay as-is, transform, suppress, or aggregate messages before re-emitting them. See FPA-010 |
 | State snapshot    | A composition fragment produced by capturing the complete system state at a point in time. A state snapshot is not a distinct system primitive — it is a composition fragment whose fields happen to have been machine-generated rather than hand-authored. Snapshots are loadable, inheritable, and overridable using the same mechanisms as any other composition fragment (see FPA-022) |
-| Tick lifecycle    | The three-phase execution model for each tick: Phase 1 (pre-tick processing: direct signals, lifecycle operations, shared context assembly, buffer swap), Phase 2 (partition stepping with intra-tick message isolation), Phase 3 (post-tick processing: event evaluation, output collection, bus request arbitration, relay). See FPA-014 |
+| Tick lifecycle    | An optional synchronization convention in which the compositor executes each processing cycle as a three-phase sequence: Phase 1 (pre-cycle processing), Phase 2 (partition stepping with message isolation), Phase 3 (post-cycle processing). Defined in FPA-CON-000 (FPA-014). Systems may adopt this convention for deterministic reproducibility or use alternative execution strategies (multi-rate, fully asynchronous) |
 
 ---
 
@@ -208,21 +210,24 @@ of truth for interface evolution and versioning.
 
 **Statement:** The system shall support at minimum three inter-partition communication
 modes: (a) in-process synchronous channels, (b) asynchronous message-passing across
-threads, and (c) network-based publish-subscribe over a configurable endpoint. The active
-mode shall be selectable at runtime via configuration without recompilation. Consistent
-with the fractal partition pattern (FPA-001), each compositor at every layer owns a
-bus instance for its partitions (see FPA-008). Bus instances at different layers are
-independent and may use different transport modes — the layer 0 bus might use network
-transport while a layer 1 bus uses in-process transport. The transport independence
-guarantee (identical results across modes) applies per bus instance.
+threads or processes, and (c) network-based publish-subscribe over a configurable
+endpoint. The active mode shall be selectable at runtime via configuration without
+recompilation. Partitions connected by a bus instance are not required to share a process,
+thread, or physical machine — the bus abstraction shall support partitions executing in
+separate processes, on separate cores, or on separate compute nodes. Consistent with the
+fractal partition pattern (FPA-001), each compositor at every layer owns a bus instance
+for its partitions (see FPA-008). Bus instances at different layers are independent and
+may use different transport modes — the layer 0 bus might use network transport while a
+layer 1 bus uses in-process transport. The transport independence guarantee (identical
+results across modes) applies per bus instance.
 
 **Rationale:** In-process channels minimize latency for single-machine development.
-Asynchronous channels support partitions running on separate threads at different update
-rates. Network-based transport enables distributed execution across machines and
-integration with external tools. No single mode satisfies all deployment contexts.
-Layer-scoped bus instances allow transport mode to be selected independently at each
-layer, matching the deployment needs of each compositor's partitions without imposing a
-system-wide choice.
+Asynchronous channels support partitions running on separate threads, in separate
+processes, or on separate cores at independent update rates. Network-based transport
+enables distributed execution across machines and integration with external tools. No
+single mode satisfies all deployment contexts. Layer-scoped bus instances allow transport
+mode to be selected independently at each layer, matching the deployment needs of each
+compositor's partitions without imposing a system-wide choice.
 
 **Verification Expectations:**
 - Pass: The same configuration executes to completion under all three transport modes with
@@ -331,11 +336,11 @@ independence guarantee (FPA-004).
 **Verification Expectations:**
 - Pass: The delivery semantic for each message type is declared in the contract crate
   and behaves identically under all three transport modes.
-- Pass: A latest-value message type published multiple times within a tick is read by a
-  slower consumer as a single value — the most recent — with no error or data loss
-  concern.
-- Pass: A queued message type published multiple times within a tick is received by the
-  consumer as a complete, ordered sequence with no dropped instances.
+- Pass: A latest-value message type published multiple times within a processing cycle is
+  read by a slower consumer as a single value — the most recent — with no error or data
+  loss concern.
+- Pass: A queued message type published multiple times within a processing cycle is
+  received by the consumer as a complete, ordered sequence with no dropped instances.
 - Fail: A transport implementation silently drops queued messages to maintain throughput.
 - Fail: The delivery behavior for a message type varies across transport modes.
 
@@ -383,29 +388,71 @@ sub-partitions.
 ### FPA-009 — Compositor Runtime Role
 
 **Statement:** The compositor at each layer shall be active at runtime, not only at
-assembly time. Its runtime responsibilities shall include: (a) driving partition
-execution by calling lifecycle trait methods (`init`, `step`, `shutdown`) on each
-partition in a controlled order; (b) owning the layer's bus instance and publishing
-shared context — aggregated state, execution state, environment context — as typed
-messages on that bus; (c) receiving and arbitrating requests from partitions on its bus,
-acting as the single owner for shared state machines at that layer (FPA-006); (d) relaying
-inter-layer requests to the outer bus according to its relay authority (FPA-010);
-and (e) catching and handling faults from its partitions (FPA-011).
+assembly time. Its runtime responsibilities shall include: (a) coordinating partition
+execution through a lifecycle contract (`init`, `step`, `shutdown`). The degree of
+control ranges from direct invocation — the compositor calls each partition's lifecycle
+methods via trait calls (in-process), message-based dispatch (cross-process), or remote
+procedure calls (cross-node) — to supervisory coordination, where partitions run their
+own execution loops and the compositor manages initialization, shutdown, fault detection,
+and shared context publication. The compositor is always the lifecycle authority: even
+when partitions self-schedule their processing, the compositor controls when they may
+start, when they must stop, and under what conditions they are considered faulted.
+(b) Owning the layer's bus instance and publishing shared context — aggregated state,
+execution state, environment context — as typed messages on that bus; (c) receiving and
+arbitrating requests from partitions on its bus, acting as the single owner for shared
+state machines at that layer (FPA-006); (d) relaying inter-layer requests to the outer bus
+according to its relay authority (FPA-010); and (e) detecting and handling faults from its
+partitions (FPA-011). The compositor's execution strategy — lock-step ticks, multi-rate
+scheduling, or fully asynchronous operation — is an implementation choice, scoped to
+that compositor's layer. Different layers may use different execution strategies
+independently: a layer 0 compositor using lock-step ticks can compose a partition whose
+internal layer 1 compositor uses supervisory coordination, and vice versa. The
+compositor at the layer boundary adapts between strategies — presenting the interface the
+outer layer expects while internally using whatever strategy its sub-partitions require.
+When a compositor's execution strategy differs from the outer layer's, the data it
+returns may reflect the latest available state from its sub-partitions rather than state
+computed synchronously for the current cycle. The compositor shall indicate data
+freshness — whether its output was computed for the current invocation or is the most
+recent previously computed result — as metadata accompanying its output on the outer bus.
+The freshness representation is defined in the contract crate alongside the output type.
+The core architecture does not mandate a particular synchronization model; the tick
+lifecycle convention (FPA-014 in FPA-CON-000) is one available strategy that provides
+deterministic reproducibility.
 
 **Rationale:** The compositor's assembly-time role
 (selecting and instantiating partition implementations) is complemented by runtime
-communication responsibilities. Making these explicit is necessary because the
+coordination responsibilities. Making these explicit is necessary because the
 compositor sits at the boundary between layers: it is simultaneously the bus owner for
 its inner layer (role a-c) and a partition on the outer layer (role d). Without a
 defined runtime role, the compositor's responsibilities for relay, fault handling, and
-downward data broadcast are ambiguous. The principled split is: trait calls for
-imperative lifecycle control (the compositor controls execution order), bus broadcast for
-shared context (partitions subscribe to typed messages regardless of source), and bus
-requests for upward communication (partitions emit, compositor arbitrates).
+downward data broadcast are ambiguous. The principled split is: lifecycle coordination
+for execution control (the compositor is the authority over partition lifecycle), bus
+broadcast for shared context (partitions subscribe to typed messages regardless of
+source), and bus requests for upward communication (partitions emit, compositor
+arbitrates). The degree of execution control varies by strategy: under lock-step
+execution, the compositor directly invokes each partition's `step()` and controls
+ordering; under fully asynchronous operation, partitions run their own processing loops
+while the compositor supervises lifecycle boundaries (init, shutdown, fault detection)
+and maintains the bus. In both cases the compositor remains the lifecycle authority —
+no partition decides independently when it may start or whether it should continue after
+a fault. This flexibility allows FPA-conforming systems to range from lock-step
+simulations with in-process trait calls to fully distributed systems with partitions on
+separate compute nodes running autonomous processing loops. Because execution strategy is
+layer-local, a system built with one strategy can be embedded as a partition in a system
+using a different strategy without modification — the compositor at the boundary adapts.
+Data freshness metadata ensures that when strategies differ across a layer boundary, the
+outer layer can distinguish between freshly computed output and cached state from an
+asynchronous partition, enabling informed decisions about whether to proceed, wait, or
+use fallback values.
 
 **Verification Expectations:**
-- Pass: The compositor calls `step()` on each partition in a defined order; partitions
-  do not self-schedule.
+- Pass: The compositor controls partition lifecycle: no partition initializes, begins
+  processing, or shuts down without the compositor's coordination.
+- Pass: Under direct-invocation strategies, the compositor invokes each partition's
+  lifecycle methods (`init`, `step`, `shutdown`) in a defined protocol.
+- Pass: Under supervisory strategies, the compositor manages initialization and shutdown
+  sequencing, detects partition faults (via heartbeat, timeout, or equivalent), and
+  publishes shared context — even though partitions schedule their own processing.
 - Pass: Shared context (aggregated state, execution state) is available to partitions as
   typed messages on the layer's bus, published by the compositor.
 - Pass: A partition consumes shared context using the same bus subscription mechanism it
@@ -417,6 +464,15 @@ requests for upward communication (partitions emit, compositor arbitrates).
   communication or bus management.
 - Fail: Shared context is passed to partitions exclusively through trait method
   arguments, preventing uniform bus-based consumption.
+- Pass: A partition built with one execution strategy (e.g., supervisory coordination
+  internally) is composable into a system using a different strategy (e.g., lock-step
+  ticks) without modification to either the partition or the outer system.
+- Pass: When a compositor's output reflects previously computed state rather than state
+  computed for the current invocation, the output carries freshness metadata indicating
+  this, as defined in the contract crate.
+- Fail: A partition initializes or shuts down without the compositor's involvement.
+- Fail: The outer layer's execution strategy constrains or is constrained by the
+  execution strategies used at inner layers.
 
 ---
 
@@ -461,9 +517,10 @@ to an alternative sub-partition implementation) without propagating to the outer
 
 ### FPA-011 — Compositor Fault Handling
 
-**Statement:** When a sub-partition faults during any trait method call — including
-`step()`, `init()`, `shutdown()`, `contribute_state()`, and `load_state()` — by
-returning an error, panicking, or timing out, the compositor at that layer shall catch
+**Statement:** When a sub-partition faults during any lifecycle invocation — including
+`step()`, `init()`, `shutdown()`, `contribute_state()`, and `load_state()` (or their
+equivalents under the active invocation mechanism) — by returning an error, panicking,
+or timing out, the compositor at that layer shall catch
 the fault, log it with the faulting sub-partition's identity and layer depth, and
 propagate the error to the outer layer by returning an error from the compositor's own
 trait method call. For the purposes of this requirement, a sub-partition is considered
@@ -492,7 +549,7 @@ a fault in one of the following ways, in order of preference: (1) propagate the 
 the outer layer by returning an error from the compositor's own trait method call, which
 cascades through the compositor chain until the orchestrator receives it; or (2) if a
 fallback implementation is configured for the faulting sub-partition, switch to the
-fallback, log the fault and the fallback activation, and continue the tick — the
+fallback, log the fault and the fallback activation, and continue processing — the
 compositor does not return an error to the outer layer in this case, but the fault and
 fallback are recorded in the compositor's diagnostic log. If no fallback is configured,
 the compositor shall always propagate the error (option 1). There shall be no
@@ -503,9 +560,11 @@ trait call is the propagation mechanism when errors are propagated.
 Silently continuing without a failed sub-component produces incorrect results;
 silently omitting a partition's state from a snapshot produces a snapshot that loses
 data on reload; running after a failed `init()` means the system was never correctly
-assembled. The compositor's role in fault handling is to catch raw panics (preventing
-undefined behavior from escaping), add diagnostic context (which partition, which layer,
-which operation), and either propagate a clean error or activate a configured fallback.
+assembled. The compositor's role in fault handling is to detect faults — by catching raw panics
+under direct invocation, or by detecting heartbeat failures, error reports, or abnormal
+termination under supervisory coordination — add diagnostic context (which partition,
+which layer, which operation), and either propagate a clean error or activate a
+configured fallback.
 The outer layer sees the compositor's error return (not the raw panic) when errors are
 propagated, preserving encapsulation of the internal structure while ensuring the failure
 is visible. When a fallback is configured, the compositor logs the fault and the fallback
@@ -534,7 +593,7 @@ the outer layer already provides an error propagation path.
   layer also logs it.
 - Pass: When a fallback is configured for a sub-partition and that sub-partition faults
   during `step()`, the compositor activates the fallback, logs the fault and fallback
-  activation, and continues the tick without returning an error.
+  activation, and continues processing without returning an error.
 - Fail: A sub-partition fault is silently absorbed by the compositor without logging and
   without either propagating the error or activating a configured fallback.
 - Fail: A sub-partition fault propagates as a raw panic or unhandled exception without
@@ -848,42 +907,45 @@ A dump operation shall capture the current state and write it to a specified fil
 as a composition fragment (FPA-022). A load operation shall accept a state snapshot
 composition fragment and restore the system to the captured state, replacing the
 current state of all partitions and entities. Dump shall be invocable while the system
-is actively ticking or while the tick loop is idle. Load shall be invocable only while
-the tick loop is idle; loading while partitions are actively stepping shall not be
-supported. When the system is actively ticking, dump shall be processed at a tick
-boundary (see FPA-014, Phase 1) so that all partition contributions correspond to the
-same completed tick. Both operations shall be requestable via the bus, a UI partition,
-and the event system (as event actions), consistent with the uniform request mechanisms
-used for shared state machine transitions (FPA-006).
+is actively processing or while processing is idle. Load shall be invocable only while
+processing is idle; loading while partitions are actively stepping shall not be
+supported. When the system is actively processing, the implementation shall ensure
+temporal consistency — all partition contributions shall correspond to the same completed
+processing cycle. When the tick lifecycle convention (FPA-014) is adopted, this is
+achieved by processing dump at a tick boundary in Phase 1. Both operations shall be
+requestable via the bus, a UI partition, and the event system (as event actions),
+consistent with the uniform request mechanisms used for shared state machine transitions
+(FPA-006).
 
 **Rationale:** Dump and load are the operational interface to state snapshots. Dump
 during active execution enables capturing transient conditions without stopping;
 dump while idle enables deliberate checkpointing. Restricting load to idle states
-prevents mid-tick state corruption. Processing dump at tick boundaries ensures temporal
-consistency across transport modes. Making dump and load available through the same
+prevents mid-step state corruption. Ensuring temporal consistency for dump operations
+guarantees that all partition contributions correspond to a single point in time
+regardless of execution strategy. Making dump and load available through the same
 request channels as other bus-mediated operations — bus messages, UI controls, and
 event actions — keeps the operational surface uniform. An event action for state dump
 with a path parameter allows configuration authors to script automatic checkpoints at
 specific times or conditions without UI interaction.
 
 **Verification Expectations:**
-- Pass: A dump operation invoked while the system is actively ticking produces a valid
+- Pass: A dump operation invoked while the system is actively processing produces a valid
   snapshot fragment without interrupting execution.
-- Pass: A dump captured during active ticking contains state from a single completed
-  tick — all partition contributions correspond to the same time.
-- Pass: A dump operation invoked while the tick loop is idle produces a snapshot
-  fragment, and loading that fragment in a new run produces identical initial state.
-- Pass: A load operation invoked while the tick loop is idle replaces all entity and
+- Pass: A dump captured during active processing contains state from a single completed
+  processing cycle — all partition contributions correspond to the same point in time.
+- Pass: A dump operation invoked while processing is idle produces a snapshot fragment,
+  and loading that fragment in a new run produces identical initial state.
+- Pass: A load operation invoked while processing is idle replaces all entity and
   partition state with the snapshot's state; on resumption, the system continues from
   the loaded state.
 - Pass: An event defined with a state dump action and a file path parameter
   triggers at the specified condition and produces a snapshot file at the given path.
-- Pass: A load request emitted while the system is actively ticking is rejected (logged
-  and ignored), and the system continues unaffected.
+- Pass: A load request emitted while the system is actively processing is rejected
+  (logged and ignored), and the system continues unaffected.
 - Fail: Dump or load requires a dedicated API distinct from the bus message and event
   action mechanisms used for other bus-mediated operations.
-- Fail: A dump captured during active ticking contains partition states from different
-  ticks.
+- Fail: A dump captured during active processing contains partition states from different
+  processing cycles.
 
 ---
 
