@@ -11,9 +11,9 @@ different and requires its own treatment.
 
 Without explicit vertical communication rules, several problems emerge:
 
-- A sub-partition deep in the hierarchy needs to stop the simulation, but its bus is
+- A sub-partition deep in the hierarchy needs to stop the system, but its bus is
   local to its layer. How does the request reach the orchestrator?
-- The compositor pushes shared context (WorldState, execution state) to its partitions.
+- The compositor pushes shared context (shared state, execution state) to its partitions.
   Is this a trait call or a bus broadcast? The answer affects how partitions consume it.
 - State snapshots must collect contributions from every partition at every layer. The
   collection must recurse through compositors without breaking encapsulation.
@@ -27,26 +27,26 @@ between layers during execution.
 ## The layer-scoped bus
 
 Each compositor owns a bus instance for its layer's partitions. The layer 0 orchestrator
-owns the layer 0 bus. If the physics partition decomposes into sub-partitions at layer 1,
-the physics compositor owns a layer 1 bus for atmosphere, aerodynamics, and gravity. If
-the atmosphere model further decomposes at layer 2, its compositor owns a layer 2 bus.
+owns the layer 0 bus. If partition A decomposes into sub-partitions at layer 1,
+partition A's compositor owns a layer 1 bus for sub-partitions A1, A2, and A3. If
+sub-partition A1 further decomposes at layer 2, its compositor owns a layer 2 bus.
 
 ```
 Layer 0 bus (orchestrator):
-  ↔ physics partition
-  ↔ gnc partition
-  ↔ visualization partition
-  ↔ ui partition
+  ↔ partition A
+  ↔ partition B
+  ↔ partition C
+  ↔ partition D
 
-Layer 1 bus (physics compositor):
-  ↔ atmosphere sub-partition
-  ↔ aerodynamics sub-partition
-  ↔ gravity sub-partition
+Layer 1 bus (partition A compositor):
+  ↔ sub-partition A1
+  ↔ sub-partition A2
+  ↔ sub-partition A3
 
-Layer 1 bus (gnc compositor):
-  ↔ estimator sub-partition
-  ↔ guidance sub-partition
-  ↔ control sub-partition
+Layer 1 bus (partition B compositor):
+  ↔ sub-partition B1
+  ↔ sub-partition B2
+  ↔ sub-partition B3
 ```
 
 Bus instances are independent. They may run different transport modes — the layer 0 bus
@@ -86,23 +86,23 @@ decides which partition steps first, when to collect state, and when to shut dow
 
 ### Bus broadcast for shared context
 
-Data that all partitions need — WorldState, execution state, environment context — flows
-downward through the layer's bus. The compositor publishes it on the bus, and partitions
-consume it alongside peer messages. From the partition's perspective, there is no
-distinction between data from the compositor and data from a peer — both arrive as typed
-messages on the bus.
+Data that all partitions need — shared state, execution state, environment context —
+flows downward through the layer's bus. The compositor publishes it on the bus, and
+partitions consume it alongside peer messages. From the partition's perspective, there is
+no distinction between data from the compositor and data from a peer — both arrive as
+typed messages on the bus.
 
 This means partitions consume downward context using the same subscription mechanism they
-use for horizontal data. A partition that reads `WorldState` does not know or care
-whether it was published by the compositor or by a peer partition — it subscribes to
-`WorldState` on the bus and receives it.
+use for horizontal data. A partition that reads shared state does not know or care
+whether it was published by the compositor or by a peer partition — it subscribes to the
+type on the bus and receives it.
 
 The principled split is:
 
 | Mechanism | Purpose | Examples |
 |---|---|---|
 | Trait calls | Imperative lifecycle control | `step()`, `init()`, `shutdown()`, `contribute_state()` |
-| Bus broadcast | Shared context and data | WorldState, execution state, environment state |
+| Bus broadcast | Shared context and data | Shared state, execution state, environment state |
 
 Trait calls are targeted (one partition at a time) and sequential (the compositor
 controls order). Bus broadcasts are untargeted (all partitions receive) and decoupled
@@ -121,14 +121,14 @@ shared state machines — it emits a typed request on the bus. The compositor re
 request and arbitrates using the same single-owner authority pattern described in
 [Inter-partition Communication](inter-partition-communication.md).
 
-A sub-partition emitting `ExecutionStateRequest::Stop` on the layer 1 bus is using the
+A sub-partition emitting a stop request on the layer 1 bus is using the
 same mechanism as a partition emitting the same request on the layer 0 bus. The
 compositor at each layer is the arbitrator for its bus. The pattern is uniform; only the
 scope changes.
 
 ### Data contributions
 
-Partitions publish their output data on the bus — `PlantState`, `GNCCommand`, sensor
+Partitions publish their output data on the bus — state updates, commands, sensor
 readings — and the compositor consumes it. This is the same horizontal publishing
 mechanism, but the compositor happens to be one of the consumers. The compositor may
 aggregate contributions (assembling individual partition outputs into a composite output
@@ -138,14 +138,14 @@ contract obligations.
 ## Relay across layers
 
 When a request on an inner bus needs to reach an outer layer — a sub-partition's
-`ExecutionStateRequest::Stop` needs to reach the orchestrator — the compositor acts as
+stop request needs to reach the orchestrator — the compositor acts as
 a relay gateway. This is the mechanism that connects layer-scoped buses into a coherent
 system.
 
 ### The relay chain
 
 ```
-Layer 2 sub-partition emits ExecutionStateRequest::Stop
+Layer 2 sub-partition emits stop request
   → layer 2 bus
   → layer 1 compositor receives, decides to relay
   → layer 1 compositor emits on layer 1 bus
@@ -159,8 +159,8 @@ automatic forwarding — the compositor has full authority over what crosses its
 boundary.
 
 Because each compositor processes its inner bus during its own `step()` and relays on
-the next outer-bus read cycle, a request emitted at layer N may take up to N physics
-ticks to reach the orchestrator. This latency is acceptable for normal execution state
+the next outer-bus read cycle, a request emitted at layer N may take up to N ticks to
+reach the orchestrator. This latency is acceptable for normal execution state
 transitions. Safety-critical signals that cannot tolerate relay latency use the direct
 signal mechanism, which bypasses the relay chain entirely.
 
@@ -170,13 +170,12 @@ The compositor is not a transparent pipe. When it receives a request on its inne
 it may:
 
 - **Relay as-is.** Forward the request to the outer bus unchanged. This is the common
-  case for requests like `ExecutionStateRequest::Stop` where the compositor has no
-  reason to intervene.
+  case for stop requests where the compositor has no reason to intervene.
 
 - **Transform.** Modify the request before relaying. The compositor might add context
-  ("physics partition requested stop because aerodynamics sub-partition detected
-  structural load exceedance") or change the request type (converting an internal
-  warning into an external stop request).
+  ("partition A requested stop because sub-partition A2 detected a constraint
+  violation") or change the request type (converting an internal warning into an
+  external stop request).
 
 - **Suppress.** Handle the request internally without relaying. The compositor might
   respond to a sub-partition failure by switching to a fallback implementation rather
@@ -203,15 +202,15 @@ compositor's contract, not by its implementation. This is the same principle tha
 partitions replaceable: the contract, not the internals, defines the interface.
 
 The cost is that every compositor must handle relay decisions. In practice, most
-compositors relay `ExecutionStateRequest` transparently and suppress everything else —
+compositors relay execution state requests transparently and suppress everything else —
 a small amount of boilerplate for a strong encapsulation guarantee.
 
 ## Direct signals
 
 While the default path for inter-layer requests is the compositor relay
 chain, certain safety-critical signals must reach the orchestrator without risk of being
-suppressed or delayed by intermediate compositors. The contract crate at the outermost
-layer may declare **direct signal types** that bypass the relay chain entirely.
+suppressed or delayed by intermediate compositors. A contract crate may declare
+**direct signal types** that bypass the relay chain within that crate's hierarchy.
 
 ### When direct signals are warranted
 
@@ -219,7 +218,7 @@ Direct signals exist for a narrow set of scenarios where compositor authority is
 liability rather than an asset:
 
 - **Emergency stop.** A hardware fault or safety limit exceedance that must halt the
-  simulation immediately, regardless of any compositor's policy.
+  system immediately, regardless of any compositor's policy.
 - **Hardware fault.** A sensor or actuator failure detected at any layer that requires
   system-wide response.
 
@@ -237,7 +236,7 @@ directly.
 Layer 2 sub-partition emits DirectSignal::EmergencyStop
   → bypasses layer 2 bus
   → bypasses layer 1 bus
-  → reaches universe's orchestrator directly
+  → reaches system orchestrator directly
   → orchestrator applies emergency response
 ```
 
@@ -248,29 +247,31 @@ is that no compositor in the chain can intercept or suppress it.
 ### Direct signals are hierarchy-scoped
 
 Direct signals are scoped to the contract crate that declares them — they are not truly
-system-global when the system is embedded. When universe is a partition in an outer
+global when the system is embedded. When an inner system is a partition in an outer
 application:
 
 ```
 Outer app (layer 0):
   outer-core (outer contract crate)
-  outer orchestrator ↔ universe (partition) ↔ other partitions
+  outer orchestrator ↔ inner-system (partition) ↔ other partitions
 
-Universe (layer 1 from outer app's perspective):
-  sim-core (universe's contract crate)
-  universe orchestrator ↔ physics ↔ gnc ↔ viz ↔ ui
+Inner system (layer 1 from outer app's perspective):
+  inner-core (inner system's contract crate)
+  inner orchestrator ↔ partition A ↔ partition B ↔ partition C ↔ partition D
 ```
 
-A `DirectSignal::EmergencyStop` declared in `sim-core` and emitted by a physics
-sub-partition reaches universe's orchestrator — not the outer app's orchestrator. The
-signal does not cross universe's boundary. The outer app learns of the event only
-through universe's contract interface on the outer bus (e.g., a status change or request
-that universe emits as a result of handling the emergency internally).
+A `DirectSignal::EmergencyStop` declared in `inner-core` and emitted by a
+sub-partition reaches the inner system's orchestrator — not the outer app's
+orchestrator. The signal does not cross the inner system's boundary. The outer app
+learns of the event only through the inner system's contract interface on the outer bus
+(e.g., a status change or request that the inner system emits as a result of handling
+the emergency internally).
 
-This scoping preserves encapsulation. The outer app treats universe as an opaque
-partition. It does not know about `sim-core`'s direct signal types, just as it does not
-know about universe's internal partitions. If the outer app needs its own direct signals,
-it declares them in `outer-core`, independent of universe's internal signals.
+This scoping preserves encapsulation. The outer app treats the inner system as an opaque
+partition. It does not know about `inner-core`'s direct signal types, just as it does
+not know about the inner system's internal partitions. If the outer app needs its own
+direct signals, it declares them in `outer-core`, independent of the inner system's
+internal signals.
 
 ### Constraints on direct signals
 
@@ -303,19 +304,19 @@ When the orchestrator requests a state snapshot, it calls `contribute_state()` o
 layer 0 partition. A partition that is a compositor delegates recursively:
 
 ```
-orchestrator calls physics.contribute_state()
-  physics compositor calls atmo.contribute_state()  → atmosphere fragment
-  physics compositor calls aero.contribute_state()  → aerodynamics fragment
-  physics compositor calls gravity.contribute_state() → gravity fragment
-  physics compositor assembles:
-    [physics]
+orchestrator calls partition_a.contribute_state()
+  partition A compositor calls a1.contribute_state()  → A1 fragment
+  partition A compositor calls a2.contribute_state()  → A2 fragment
+  partition A compositor calls a3.contribute_state()  → A3 fragment
+  partition A compositor assembles:
+    [partition_a]
     internal_state = ...
-    [physics.atmosphere]
-    ...from atmosphere fragment...
-    [physics.aerodynamics]
-    ...from aerodynamics fragment...
-    [physics.gravity]
-    ...from gravity fragment...
+    [partition_a.a1]
+    ...from A1 fragment...
+    [partition_a.a2]
+    ...from A2 fragment...
+    [partition_a.a3]
+    ...from A3 fragment...
   returns assembled fragment to orchestrator
 ```
 
@@ -326,21 +327,21 @@ key-value map — preserving the hierarchical structure and remaining compatible
 
 The outer layer sees one contribution per partition. It does not know whether the
 contribution was assembled from sub-partitions or produced monolithically. A replacement
-physics partition with no internal decomposition produces the same top-level structure.
+partition with no internal decomposition produces the same top-level structure.
 
 ### Load (downward decomposition, downward delegation)
 
 Loading a snapshot reverses the process:
 
 ```
-orchestrator calls physics.load_state(physics_fragment)
-  physics compositor extracts own internal state
-  physics compositor extracts [physics.atmosphere] section
-  physics compositor calls atmo.load_state(atmosphere_section)
-  physics compositor extracts [physics.aerodynamics] section
-  physics compositor calls aero.load_state(aerodynamics_section)
-  physics compositor extracts [physics.gravity] section
-  physics compositor calls gravity.load_state(gravity_section)
+orchestrator calls partition_a.load_state(partition_a_fragment)
+  partition A compositor extracts own internal state
+  partition A compositor extracts [partition_a.a1] section
+  partition A compositor calls a1.load_state(a1_section)
+  partition A compositor extracts [partition_a.a2] section
+  partition A compositor calls a2.load_state(a2_section)
+  partition A compositor extracts [partition_a.a3] section
+  partition A compositor calls a3.load_state(a3_section)
 ```
 
 The compositor decomposes the fragment along the same boundaries used for assembly and
@@ -366,10 +367,9 @@ a bus concern. There is no fault-specific infrastructure.
 The compositor calls `step()` on each sub-partition. If a sub-partition returns an error,
 the compositor decides the response:
 
-- **Emit a stop request.** The most common response. The compositor emits
-  `ExecutionStateRequest::Stop` on its bus (which may then be relayed to the outer
-  layer through the normal relay chain). The outer layer sees a stop request from the
-  partition, not a raw fault from a sub-partition.
+- **Emit a stop request.** The compositor emits a stop request on its bus (which may
+  then be relayed to the outer layer through the normal relay chain). The outer layer
+  sees a stop request from the partition, not a raw fault from a sub-partition.
 
 - **Fall back.** If an alternative implementation is available, the compositor might
   switch to it and continue execution. The outer layer never knows the primary
@@ -419,7 +419,7 @@ is the cost; the contract boundary as the communication boundary is the benefit.
 ### Why bus broadcast for downward data, not trait arguments
 
 An alternative design passes downward context as arguments to trait methods —
-`step(dt, world_state, exec_state)` instead of publishing `WorldState` on the bus. This
+`step(dt, shared_state, exec_state)` instead of publishing shared state on the bus. This
 is more explicit but has costs:
 
 - It couples the trait signature to the set of shared context types. Adding a new shared
@@ -428,7 +428,7 @@ is more explicit but has costs:
   and compositor data (method arguments). Partitions must handle two consumption
   mechanisms for data that is functionally equivalent.
 - It prevents partitions from being agnostic about the source of data. A partition that
-  subscribes to `WorldState` on the bus does not know or care whether it was published
+  subscribes to shared state on the bus does not know or care whether it was published
   by the compositor or by a peer.
 
 Bus broadcast for shared context keeps all data consumption uniform: partitions subscribe
@@ -452,7 +452,7 @@ entire system.
 The compositor relay chain is the right default — it preserves encapsulation and gives
 each layer control over what crosses its boundary. But for safety-critical signals, the
 cost of a missed or delayed relay exceeds the cost of breaking encapsulation. A hardware
-fault that a compositor inadvertently suppresses could allow a simulation to continue in
+fault that a compositor inadvertently suppresses could allow the system to continue in
 an unsafe state.
 
 Direct signals are the escape hatch: declared sparingly in a contract crate, scoped to
@@ -466,9 +466,9 @@ safety mechanisms independently.
 
 The inter-layer communication architecture defines *what* is communicated and *who*
 has authority over it, but does not by itself determine *when* messages become visible
-to other partitions. The compositor tick lifecycle (SIM-SYS-062) fills this gap: it
+to other partitions. The compositor tick lifecycle (FPA-014) fills this gap: it
 defines a three-phase execution model with double-buffered message isolation, tick
-barriers for WorldState assembly, and direct signal polling between partition steps.
+barriers for shared state assembly, and direct signal polling between partition steps.
 Without this lifecycle, different transport modes could make different visibility
 choices, violating transport independence. See the
 [tick lifecycle and synchronization](tick-lifecycle-and-synchronization.md) explainer

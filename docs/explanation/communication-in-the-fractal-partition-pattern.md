@@ -42,7 +42,7 @@ components.
 
 ### Transport independence
 
-Messages travel through a transport abstraction (the `SimBus` trait) that supports
+Messages travel through a transport abstraction (the `Bus` trait) that supports
 multiple modes — in-process, async, network. The active mode is selected at runtime.
 No partition contains transport-specific code. The requirement that all transport modes
 produce identical results is a correctness constraint, not a convenience.
@@ -51,10 +51,10 @@ produce identical results is a correctness constraint, not a convenience.
 
 ### Inter-partition (horizontal)
 
-Peer partitions at the same layer exchange data through the bus. Physics publishes
-`PlantState`; GN&C consumes it. Neither knows the other exists. The bus mediates.
-Communication is symmetric — any partition can publish, any can subscribe — and the
-compositor at that layer is not involved in routing.
+Peer partitions at the same layer exchange data through the bus. Partition A publishes
+`PartitionOutput`; Partition B consumes it. Neither knows the other exists. The bus
+mediates. Communication is symmetric — any partition can publish, any can subscribe —
+and the compositor at that layer is not involved in routing.
 
 The inter-partition communication model is detailed in
 [Inter-partition Communication](inter-partition-communication.md).
@@ -67,11 +67,11 @@ direction of communication determines the mechanism:
 
 - **Downward (compositor → partitions):** Lifecycle control flows through trait method
   calls — `step()`, `init()`, `shutdown()`. Shared context flows through bus broadcasts
-  on the layer's bus — the compositor publishes `WorldState` and execution state, and
+  on the layer's bus — the compositor publishes shared state and execution state, and
   partitions consume them alongside peer messages.
 
 - **Upward (partitions → compositor):** Requests flow through the bus — a partition
-  emits `ExecutionStateRequest` or other typed requests, and the compositor receives
+  emits state-change requests or other typed requests, and the compositor receives
   them as the bus owner and arbitrates.
 
 - **Relay (inner layer → outer layer):** When a request must reach a higher layer,
@@ -87,14 +87,14 @@ detailed in [Inter-layer Communication](inter-layer-communication.md).
 ## How the two relate
 
 The bus is **layer-scoped**. Each compositor owns a bus instance for its layer's
-partitions. The layer 0 orchestrator owns the layer 0 bus. A physics compositor at
-layer 1 owns a separate layer 1 bus for its sub-partitions. These are distinct bus
+partitions. The layer 0 orchestrator owns the layer 0 bus. A compositor at layer 1
+owns a separate layer 1 bus for its sub-partitions. These are distinct bus
 instances, potentially with different transport modes.
 
 ```
-Layer 0 bus:  orchestrator ↔ physics, gnc, viz, ui
-Layer 1 bus (physics):  physics compositor ↔ atmo, aero, gravity
-Layer 1 bus (gnc):  gnc compositor ↔ estimator, guidance, control
+Layer 0 bus:  orchestrator ↔ partition-A, partition-B, partition-C, partition-D
+Layer 1 bus (A):  partition-A compositor ↔ sub-A1, sub-A2, sub-A3
+Layer 1 bus (B):  partition-B compositor ↔ sub-B1, sub-B2, sub-B3
 ```
 
 A sub-partition at layer 1 never publishes directly to the layer 0 bus. If its request
@@ -104,9 +104,8 @@ bus. Each compositor in the chain can intercept, transform, or suppress.
 
 This scoping preserves encapsulation: the outer layer sees its partitions as opaque
 units. It does not know — and cannot depend on — the internal structure of any partition.
-A physics partition that decomposes into atmosphere, aerodynamics, and gravity looks
-identical on the layer 0 bus to a physics partition that is monolithic. The bus boundary
-matches the contract boundary.
+A partition that decomposes into three sub-partitions looks identical on the layer 0 bus
+to a partition that is monolithic. The bus boundary matches the contract boundary.
 
 ### What is the same
 
@@ -114,7 +113,7 @@ matches the contract boundary.
 |---|---|---|
 | Contract location | Contract crate at that layer | Same contract crate |
 | Typed messages | All boundary-crossing data | Same |
-| Transport independence | SimBus trait, 3 modes | Same, per layer |
+| Transport independence | Bus trait, 3 modes | Same, per layer |
 | Requests not mutations | Partitions emit, owner arbitrates | Same — compositor is owner |
 | Shared state machines | Defined in contract, single owner | Same |
 
@@ -133,7 +132,7 @@ matches the contract boundary.
 The compositor has two communication roles that operate simultaneously:
 
 1. **Bus owner for its layer.** It creates the bus, connects partitions, publishes
-   shared context (WorldState, execution state), and receives requests. In this role it
+   shared context (shared state, execution state), and receives requests. In this role it
    is the layer's orchestrator — the single authority for arbitration and state ownership.
 
 2. **Partition on the outer layer.** It implements the contract traits of the layer

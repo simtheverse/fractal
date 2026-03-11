@@ -54,12 +54,12 @@ different threads or different machines — the output is the same. A bug can be
 from a configuration file alone, without recreating the exact deployment topology,
 thread schedule, or execution order.
 
-This is qualitatively different from systems where inter-system communication is
-immediate. In such systems, the result depends on execution order: if physics reads
-input before audio updates it, the behavior differs from the case where audio updates
-first. This ordering sensitivity is a chronic source of bugs, particularly in game
-engines and real-time simulations. The double-buffered tick lifecycle eliminates it by
-construction.
+This is qualitatively different from systems where inter-partition communication is
+immediate. In such systems, the result depends on execution order: if partition A reads
+input before partition B updates it, the behavior differs from the case where partition B
+updates first. This ordering sensitivity is a chronic source of bugs, particularly in
+game engines and real-time simulations. The double-buffered tick lifecycle eliminates it
+by construction.
 
 **Safe concurrent execution.** The double-buffered approach makes concurrent stepping
 safe without locks on the read path. Each partition reads from the read buffer (which is

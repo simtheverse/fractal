@@ -3,7 +3,8 @@
 ## Who is this for?
 
 This document is for architects and technical leads evaluating whether the fractal
-partition pattern (FPA) fits their system. It describes the class of system that the
+partition pattern fits their system. (The Fractal Partition Architecture — FPA — is the
+specification of this pattern.) It describes the class of system that the
 pattern produces, the properties that emerge from it, and the domains where those
 properties are most valuable.
 
@@ -62,8 +63,8 @@ primitives as a contributor working at the system level: the same contract/compo
 structure, the same composition fragment format, the same event schema.
 
 This is qualitatively different from a system that accumulates distinct mechanisms at each
-scale. In such systems, understanding the whole requires learning every mechanism. In an
-FPA system, understanding one layer is understanding every layer. The depth of the system
+scale. In such systems, understanding the whole requires learning every mechanism. In a system built on the
+Fractal Partition Architecture, understanding one layer is understanding every layer. The depth of the system
 can grow — new layers of decomposition can be added where the domain warrants it —
 without increasing the number of concepts a contributor must hold in their head.
 

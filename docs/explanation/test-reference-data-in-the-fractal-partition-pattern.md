@@ -17,21 +17,21 @@ rest of the fractal partition pattern: structural boundaries do the work.
 
 ## The cascade problem
 
-Consider a concrete example. The atmosphere sub-model (layer 2, inside the physics
-partition) improves its temperature calculation. The change is correct — it passes the
-atmosphere contract tests. But the improvement changes the atmosphere's outputs slightly,
-which changes the physics partition's composed output at layer 1, which changes the
-system's end-to-end output at layer 0.
+Consider a concrete example. A sub-partition at layer 2 (inside a layer 1 partition)
+improves its calculation algorithm. The change is correct — it passes the sub-partition's
+contract tests. But the improvement changes the sub-partition's outputs slightly, which
+changes the parent partition's composed output at layer 1, which changes the system's
+end-to-end output at layer 0.
 
 If tests at each layer assert against exact golden files — captured output from a
-previous run — then this single sub-model improvement invalidates:
+previous run — then this single sub-partition improvement invalidates:
 
-- The atmosphere contract test golden file (layer 2)
-- The physics compositor test golden file (layer 1)
+- The sub-partition's contract test golden file (layer 2)
+- The parent partition's compositor test golden file (layer 1)
 - The layer 0 compositor test golden file
 - System test reference outputs
 
-The contributor who improved the atmosphere model must now understand and update golden
+The contributor who improved the sub-partition must now understand and update golden
 files across four layers, possibly owned by different teams, in different parts of the
 repository. If they miss one, the stale golden file either causes a false test failure
 (annoying but safe) or, worse, the test framework's tolerance is loose enough that it
@@ -43,13 +43,13 @@ a cross-cutting concern that touches every layer.
 
 ## The architecture: four principles
 
-The reference data architecture is specified in SIM-SYS-051 through SIM-SYS-054. The
+The reference data architecture is specified in FPA-036 through FPA-039. The
 requirements are precise; this section explains the reasoning and the relationships
 between them.
 
 ### Principle 1: Reference data lives at the contract boundary
 
-*Specified in SIM-SYS-051.*
+*Specified in FPA-036.*
 
 Each contract owns two things for testing purposes:
 
@@ -59,17 +59,16 @@ Each contract owns two things for testing purposes:
   conforming implementation must satisfy for those inputs.
 
 The critical distinction is between **output properties** and **output values**. A
-contract test for the atmosphere sub-model does not assert "given this input, the
-temperature at altitude 10 km is 223.15 K." It asserts "given this input, the
-temperature at altitude 10 km is within the ISA tolerance band" or "temperature
-decreases monotonically with altitude in the troposphere" or "the output satisfies
-energy conservation within 1e-6 relative error."
+contract test for a sub-partition does not assert "given this input, the output value
+is exactly 223.15." It asserts "given this input, the output is within the contract's
+stated tolerance band" or "the output satisfies a monotonicity invariant" or "the output
+satisfies conservation within 1e-6 relative error."
 
 These are properties of the contract, not properties of a specific implementation. They
 change when the contract changes and are stable across implementation changes. This
-eliminates cascade invalidation at the contract test level entirely: improving the
-atmosphere model's accuracy does not change the atmosphere contract's invariants, so
-the contract tests do not need updating.
+eliminates cascade invalidation at the contract test level entirely: improving a
+sub-partition's accuracy does not change the contract's invariants, so the contract
+tests do not need updating.
 
 The canonical inputs and expected output properties live alongside the contract
 definition — in the same module, maintained by the same author. When a contract's
@@ -78,7 +77,7 @@ There is no separate golden file that can drift.
 
 ### Principle 2: Compositor tests assert compositional properties
 
-*Specified in SIM-SYS-052.*
+*Specified in FPA-037.*
 
 The cascade problem is worst at the compositor level, because a compositor test's output
 depends on the combined behavior of every partition it composes. If a compositor test
@@ -93,15 +92,15 @@ independent of any specific partition's numerical output:
   it in the same tick (or next tick, per the contract).
 - **Conservation**: the sum of energy (or mass, or momentum) across all partition
   boundaries is preserved within stated tolerances.
-- **Ordering**: execution order respects the declared dependency graph — physics runs
-  before GN&C, which runs before visualization.
+- **Ordering**: execution order respects the declared dependency graph — partition A runs
+  before partition B, which runs before partition C.
 - **Visibility**: state that one partition publishes is visible to its declared consumers
   at the time specified by the contract.
 
 These properties are stable across partition implementation changes because they derive
 from the composition structure, not from numerical outputs. Replacing the default
-atmosphere model with a student's alternative doesn't change whether messages are
-delivered or energy is conserved — it changes the specific temperature values, which the
+implementation with an alternative doesn't change whether messages are delivered or
+conserved quantities are preserved — it changes the specific output values, which the
 compositor test doesn't assert.
 
 Where compositor tests genuinely need regression baselines with exact values — for
@@ -112,10 +111,10 @@ recorded alongside the baseline, so provenance is always traceable.
 
 ### Principle 3: System test references are generated bottom-up
 
-*Specified in SIM-SYS-053.*
+*Specified in FPA-038.*
 
 System tests are the one place where exact end-to-end reference outputs are sometimes
-unavoidable. A requirement like "a vehicle launched with these initial conditions reaches
+unavoidable. A requirement like "a system started with these initial conditions reaches
 this final state" demands a specific expected value, not just an invariant.
 
 For these cases, the reference data is generated by running the full stack with
@@ -145,11 +144,10 @@ implementation has a bug.
 
 ### Principle 4: Contract versioning bounds propagation
 
-*Specified in SIM-SYS-054.*
+*Specified in FPA-039.*
 
-The fractal partition pattern supports alternative implementations at every layer. A
-student's GN&C plugin, a lab's custom atmosphere model, and the default implementations
-all coexist. When a contract changes, all of these alternatives must update — unless
+The fractal partition pattern supports alternative implementations at every layer.
+Third-party components, experimental implementations, and the defaults all coexist. When a contract changes, all of these alternatives must update — unless
 the change is versioned.
 
 Contract versioning scopes reference data propagation: each contract version carries its
@@ -161,8 +159,8 @@ N to version N+1:
 - Implementations targeting version N+1 use the new reference data.
   They must satisfy the new contract's properties.
 
-This allows alternative implementations to migrate on their own schedule. The student's
-GN&C plugin can continue targeting contract version N while the default implementation
+This allows alternative implementations to migrate on their own schedule. A third-party
+component can continue targeting contract version N while the default implementation
 moves to version N+1. Both are testable, both are valid within their contract version,
 and neither's reference data is invalidated by the other's changes.
 
@@ -231,8 +229,8 @@ verify that the composed result meets system requirements.
 
 An alternative is to require all implementations to target the latest contract version.
 This is simpler but hostile to the ecosystem the fractal partition pattern creates.
-Alternative implementations — student projects, research prototypes, lab-specific
-models — often lag behind the latest contract. Requiring simultaneous migration forces
+Alternative implementations — third-party components, research prototypes, specialized
+variants — often lag behind the latest contract. Requiring simultaneous migration forces
 either breakage (alternatives fail until updated) or stagnation (contracts don't evolve
 because too many alternatives would break). Version-scoped reference data allows the
 contract to evolve while giving alternatives a stable target to test against.

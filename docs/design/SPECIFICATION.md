@@ -52,8 +52,8 @@ mandating those choices. A conforming implementation may substitute equivalent
 technologies provided all stated behavioral and structural requirements are satisfied.
 
 **Core architecture:** This document defines the core architecture. Conventions that
-complement the core pattern — the tick lifecycle, the execution state machine, and the
-verification and testing discipline — are defined in the companion document FPA-CON-000.
+complement the core pattern — the tick lifecycle and the verification and testing
+discipline — are defined in the companion document FPA-CON-000.
 
 ### Companion Documents
 
@@ -61,6 +61,7 @@ The following companion explanation documents provide conceptual discussion and
 worked examples for the patterns defined in this specification:
 
 - `fractal-partition-pattern.md`
+- `applications-of-the-fractal-partition-pattern.md`
 - `communication-in-the-fractal-partition-pattern.md`
 - `inter-partition-communication.md`
 - `inter-layer-communication.md`
@@ -78,11 +79,11 @@ worked examples for the patterns defined in this specification:
 | Term              | Definition                                                                 |
 |-------------------|----------------------------------------------------------------------------|
 | Compositor        | A component that selects and assembles partition implementations at startup and, at runtime, owns the layer's bus instance, drives partition execution via trait calls, publishes shared context on the bus, arbitrates requests, and relays inter-layer messages to the outer bus with authority to filter, transform, or suppress |
-| Contract crate    | A module or package that defines traits and data types but contains no implementation. In a Rust realization, this is a Rust crate; other technologies may use equivalent constructs |
+| Contract crate    | A module or package that defines traits and data types but contains no implementation. Named `<partition>-contract` or `<system>-contract` by convention (see FPA-040). In a Rust realization, this is a Rust crate; other technologies may use equivalent constructs. Each contract crate maintains a `docs/design/SPECIFICATION.md` serving as its Interface Control Document (ICD) |
 | Composition fragment | A configuration block — inline or named — that selects partition implementations at a given scope within the fractal structure. A top-level composition fragment at layer 0 selects system-wide parameters. A composition fragment at layer 1 selects partition-level parameters. All composition fragments share the same override and inheritance semantics (see FPA-020, FPA-021) |
 | Delivery semantic | A per-message-type specification of how the bus delivers messages to consumers. Latest-value retains only the most recent value (suitable for continuous state). Queued retains all messages in order (suitable for requests that must not be dropped). Declared in the contract crate alongside the type. See FPA-007 |
 | Direct signal     | A safety-critical signal type declared in a contract crate that bypasses the compositor relay chain within that contract crate's hierarchy and reaches the declaring crate's orchestrator directly. Scoped to the declaring crate's jurisdiction — does not propagate beyond the boundary when the system is embedded as a partition in an outer system. Reserved for scenarios where compositor suppression would be unsafe (e.g., emergency stop, hardware fault). See FPA-013 |
-| Event action      | An action identifier specified in an event's configuration definition. All event actions are declared in contract crates and scoped to the declaring crate's hierarchy. Actions defined in the system-level contract crate (e.g., `"sys_stop"`, `"sys_pause"`, `"sys_resume"`) are available at every layer because all partitions depend on that contract crate. Actions defined in a partition's contract crate are available to events within that partition's hierarchy. The event mechanism is uniform; the action vocabulary is contract-crate-scoped. See FPA-029 |
+| Event action      | An action identifier specified in an event's configuration definition. All event actions are declared in contract crates and scoped to the declaring crate's hierarchy. Actions defined in the system-level contract crate are available at every layer because all partitions depend on that contract crate. Actions defined in a partition's contract crate are available to events within that partition's hierarchy. The event mechanism is uniform; the action vocabulary is contract-crate-scoped. See FPA-029 |
 | Fractal partition pattern | The architectural principle that the system is decomposed into layers and partitions, where each partition at every layer applies the same contract/implementation/compositor structure and the same event, configuration, and communication primitives as the system level. Named for the self-similarity of structure at every scale. See FPA-001 |
 | Layer             | A level in the system's hierarchical decomposition. Layer 0 is the system level; layer 1 is the partition level. The fractal partition pattern applies at every layer: each uses the same structural primitives (contracts, events, composition) as the layer above it |
 | Layer and partition uniformity principle | The defining property of the fractal partition pattern: structural primitives (contracts, events, configuration, composition, specification, and documentation structure) are identical in kind across all layers and partitions. A construct available at layer 0 is available in the same form at layer 1 and beyond |
@@ -90,7 +91,7 @@ worked examples for the patterns defined in this specification:
 | Partition         | A functional subdivision of the system at a given layer. At layer 0, the top-level partitions defined by the domain-specific system specification. At layer 1, sub-components within a partition (e.g., sub-models, sub-services). Each partition is independently replaceable provided it conforms to its layer's interface contracts |
 | Relay authority   | The compositor's right to decide whether a message received on its inner bus is forwarded to the outer bus. The compositor may relay as-is, transform, suppress, or aggregate messages before re-emitting them. See FPA-010 |
 | State snapshot    | A composition fragment produced by capturing the complete system state at a point in time. A state snapshot is not a distinct system primitive — it is a composition fragment whose fields happen to have been machine-generated rather than hand-authored. Snapshots are loadable, inheritable, and overridable using the same mechanisms as any other composition fragment (see FPA-022) |
-| Tick lifecycle    | The three-phase execution model for each tick: Phase 1 (pre-tick processing: direct signals, lifecycle operations, shared context assembly, buffer swap), Phase 2 (partition stepping with intra-tick message isolation), Phase 3 (post-tick processing: event evaluation, output collection, bus request processing, relay). See FPA-014 |
+| Tick lifecycle    | The three-phase execution model for each tick: Phase 1 (pre-tick processing: direct signals, lifecycle operations, shared context assembly, buffer swap), Phase 2 (partition stepping with intra-tick message isolation), Phase 3 (post-tick processing: event evaluation, output collection, bus request arbitration, relay). See FPA-014 |
 
 ---
 
@@ -280,9 +281,9 @@ makes the state machine part of the layer's interface contract rather than an
 implementation detail of any single partition. Single-owner authority with bus-mediated
 requests prevents conflicting mutations and provides a single audit point for
 transitions. The fractal partition pattern requires this mechanism to be available at
-every layer: the execution state machine (FPA-015) is one instance at layer 0, but
-sub-partitions at layer 1 or deeper may define their own shared state machines using
-the same pattern.
+every layer. A domain-specific system might define an execution lifecycle state machine
+at layer 0, while sub-partitions at layer 1 or deeper define their own shared state
+machines (e.g., mission phase, mode selections) using the same pattern.
 
 **Verification Expectations:**
 - Pass: All partitions at a given layer read a shared state machine's current value from
@@ -293,8 +294,7 @@ the same pattern.
 - Pass: An invalid transition request is rejected by the owner and logged; the state
   machine value remains unchanged.
 - Pass: At layer 1, a sub-partition defines a shared state machine in its layer's
-  contract module using the same owner/request/observe pattern used for the execution
-  state machine at layer 0.
+  contract module using the same owner/request/observe pattern used at layer 0.
 - Fail: A partition directly mutates a shared state machine's value without emitting a
   request on the bus.
 - Fail: The mechanism for defining and synchronizing a shared state machine at layer 1
@@ -487,33 +487,41 @@ the call to an isolated worker that is discarded after a timeout). The composito
 responsible for enforcing these deadlines for its sub-partitions and for treating a
 timeout exactly as a fault equivalent to an error return or panic. The error shall
 include the compositor's context (which sub-partition faulted, during which operation)
-but the failure itself shall not be suppressed — it
-cascades through the compositor chain until the orchestrator receives it and stops the
-run with a clear diagnostic. There shall be no fault-specific bus channel or
-message type; the compositor's error return from its own trait call is the propagation
-mechanism.
+but the failure itself shall not be silently suppressed. The compositor shall respond to
+a fault in one of the following ways, in order of preference: (1) propagate the error to
+the outer layer by returning an error from the compositor's own trait method call, which
+cascades through the compositor chain until the orchestrator receives it; or (2) if a
+fallback implementation is configured for the faulting sub-partition, switch to the
+fallback, log the fault and the fallback activation, and continue the tick — the
+compositor does not return an error to the outer layer in this case, but the fault and
+fallback are recorded in the compositor's diagnostic log. If no fallback is configured,
+the compositor shall always propagate the error (option 1). There shall be no
+fault-specific bus channel or message type; the compositor's error return from its own
+trait call is the propagation mechanism when errors are propagated.
 
-**Rationale:** A sub-partition fault means the system is in an invalid state.
+**Rationale:** A sub-partition fault means the system's state may be invalid.
 Silently continuing without a failed sub-component produces incorrect results;
 silently omitting a partition's state from a snapshot produces a snapshot that loses
 data on reload; running after a failed `init()` means the system was never correctly
 assembled. The compositor's role in fault handling is to catch raw panics (preventing
 undefined behavior from escaping), add diagnostic context (which partition, which layer,
-which operation), and propagate a clean error — not to absorb the failure. The outer
-layer sees the compositor's error return, not the raw panic, preserving encapsulation of
-the internal structure while ensuring the failure is visible. A separate fault channel
-or fault message type would create a parallel communication path with its own transport,
-relay, and arbitration semantics — complexity that is unnecessary because the
-compositor's call-and-return relationship with the outer layer already provides an
-error propagation path. Graceful degradation (e.g., falling back to an alternative
-partition implementation on fault) is not included — there is no current use case that
-requires it. If one arises, a dedicated requirement can be added without weakening the
-cascade guarantee defined here.
+which operation), and either propagate a clean error or activate a configured fallback.
+The outer layer sees the compositor's error return (not the raw panic) when errors are
+propagated, preserving encapsulation of the internal structure while ensuring the failure
+is visible. When a fallback is configured, the compositor logs the fault and the fallback
+activation, allowing the system to continue operating in a degraded mode rather than
+halting — this is valuable for systems that prioritize availability or where a
+lower-fidelity alternative can safely substitute for the faulted partition. Domain-specific
+systems may choose to mandate error propagation (fail-fast) as a policy by not
+configuring any fallbacks. A separate fault channel or fault message type would create a
+parallel communication path with its own transport, relay, and arbitration semantics —
+complexity that is unnecessary because the compositor's call-and-return relationship with
+the outer layer already provides an error propagation path.
 
 **Verification Expectations:**
 - Pass: A sub-partition returning an error from `step()` is caught by the compositor;
-  the compositor returns an error from its own `step()` call, which cascades to the
-  orchestrator and stops the run.
+  with no fallback configured, the compositor returns an error from its own `step()`
+  call, which cascades to the orchestrator.
 - Pass: A sub-partition panicking during `init()` is caught by the compositor; the
   compositor returns an error from its own `init()` call, preventing the run
   from starting.
@@ -524,8 +532,11 @@ cascade guarantee defined here.
   sub-partition's identity, layer depth, and the operation that faulted.
 - Pass: The compositor logs the fault with full details regardless of whether the outer
   layer also logs it.
-- Fail: A sub-partition fault is silently absorbed by the compositor and the run
-  continues running with missing or degraded partition output.
+- Pass: When a fallback is configured for a sub-partition and that sub-partition faults
+  during `step()`, the compositor activates the fallback, logs the fault and fallback
+  activation, and continues the tick without returning an error.
+- Fail: A sub-partition fault is silently absorbed by the compositor without logging and
+  without either propagating the error or activating a configured fallback.
 - Fail: A sub-partition fault propagates as a raw panic or unhandled exception without
   compositor context wrapping.
 - Fail: A dedicated fault bus or fault message channel exists alongside the regular bus.
@@ -801,7 +812,7 @@ ensures that the snapshot captures state at every layer without the orchestrator
 to know the internal decomposition of any partition.
 
 **Verification Expectations:**
-- Pass: A state snapshot captured during a Running state produces a valid TOML file
+- Pass: A state snapshot captured during active execution produces a valid TOML file
   that parses without error as a composition fragment.
 - Pass: The snapshot fragment, when loaded as the basis for a new run, produces a
   system whose initial state matches the captured state (within floating-point
@@ -836,41 +847,42 @@ to know the internal decomposition of any partition.
 A dump operation shall capture the current state and write it to a specified file path
 as a composition fragment (FPA-022). A load operation shall accept a state snapshot
 composition fragment and restore the system to the captured state, replacing the
-current state of all partitions and entities. Dump shall be invocable during any
-execution state (Running, Paused, Stopped). Load shall be invocable from the Paused or
-Stopped execution states; loading while Running shall not be supported. When the
-system is Running, dump shall be processed at a tick boundary (see FPA-014,
-Phase 1) so that all partition contributions correspond to the same completed tick.
-Both operations shall be requestable via the bus, a UI partition, and the
-event system (as event actions), consistent with the uniform request mechanisms used for
-execution state transitions (FPA-016, FPA-017).
+current state of all partitions and entities. Dump shall be invocable while the system
+is actively ticking or while the tick loop is idle. Load shall be invocable only while
+the tick loop is idle; loading while partitions are actively stepping shall not be
+supported. When the system is actively ticking, dump shall be processed at a tick
+boundary (see FPA-014, Phase 1) so that all partition contributions correspond to the
+same completed tick. Both operations shall be requestable via the bus, a UI partition,
+and the event system (as event actions), consistent with the uniform request mechanisms
+used for shared state machine transitions (FPA-006).
 
 **Rationale:** Dump and load are the operational interface to state snapshots. Dump
-during a Running state enables capturing transient conditions without pausing;
-dump while Paused or Stopped enables deliberate checkpointing. Restricting load to
-non-Running states prevents mid-tick state corruption. Processing dump at tick boundaries
-ensures temporal consistency across transport modes. Making dump and load available
-through the same request channels as execution state transitions — bus messages, UI
-controls, and event actions — keeps the operational surface uniform. An event action
-for state dump with a path parameter allows configuration authors to script automatic
-checkpoints at specific times or conditions without UI interaction.
+during active execution enables capturing transient conditions without stopping;
+dump while idle enables deliberate checkpointing. Restricting load to idle states
+prevents mid-tick state corruption. Processing dump at tick boundaries ensures temporal
+consistency across transport modes. Making dump and load available through the same
+request channels as other bus-mediated operations — bus messages, UI controls, and
+event actions — keeps the operational surface uniform. An event action for state dump
+with a path parameter allows configuration authors to script automatic checkpoints at
+specific times or conditions without UI interaction.
 
 **Verification Expectations:**
-- Pass: A dump operation invoked while the system is Running produces a valid
+- Pass: A dump operation invoked while the system is actively ticking produces a valid
   snapshot fragment without interrupting execution.
-- Pass: A dump captured during Running contains state from a single completed tick —
-  all partition contributions correspond to the same time.
-- Pass: A dump operation invoked while Paused produces a snapshot fragment, and
-  loading that fragment in a new run produces identical initial state.
-- Pass: A load operation invoked while Paused replaces all entity and partition state
-  with the snapshot's state; on resume, the system continues from the loaded state.
+- Pass: A dump captured during active ticking contains state from a single completed
+  tick — all partition contributions correspond to the same time.
+- Pass: A dump operation invoked while the tick loop is idle produces a snapshot
+  fragment, and loading that fragment in a new run produces identical initial state.
+- Pass: A load operation invoked while the tick loop is idle replaces all entity and
+  partition state with the snapshot's state; on resumption, the system continues from
+  the loaded state.
 - Pass: An event defined with a state dump action and a file path parameter
   triggers at the specified condition and produces a snapshot file at the given path.
-- Pass: A load request emitted while the system is Running is rejected (logged and
-  ignored), and the system continues unaffected.
+- Pass: A load request emitted while the system is actively ticking is rejected (logged
+  and ignored), and the system continues unaffected.
 - Fail: Dump or load requires a dedicated API distinct from the bus message and event
-  action mechanisms used for execution state control.
-- Fail: A dump captured during Running contains partition states from different
+  action mechanisms used for other bus-mediated operations.
+- Fail: A dump captured during active ticking contains partition states from different
   ticks.
 
 ---
@@ -968,9 +980,9 @@ without embedding procedural checks in partition source code.
 - Pass: Condition predicates reference signals by name as published on the bus or defined
   in partition state, without requiring the event author to specify memory addresses or
   internal data paths.
-- Pass: A condition-triggered event with a system stop action conditioned on a signal
-  threshold causes the orchestrator to transition to the Stopped state on the first tick
-  the condition is met (see FPA-017).
+- Pass: A condition-triggered event with an action that requests a shared state machine
+  transition causes the appropriate state change on the first tick the condition is met
+  (see FPA-006).
 - Fail: Condition-triggered events can only monitor system-level signals; partition-
   internal state is not observable by the event system.
 
@@ -1001,8 +1013,9 @@ coupling between the event configuration and partition internals.
   schema, and both trigger correctly without interference.
 - Pass: A partition-scoped event is defined in the partition's section of the
   configuration and does not require modification to any other partition's configuration.
-- Pass: A partition event armed on an internal signal fires a system stop action that
-  the orchestrator applies, halting the run without UI involvement (see FPA-017).
+- Pass: A partition event armed on an internal signal fires an action declared in the
+  system-level contract crate, and the resulting request reaches the orchestrator through
+  the relay chain (see FPA-010).
 - Fail: Arming an event within a partition requires modifying the system-level contract
   crate or the system-level event dispatcher source code.
 
@@ -1062,9 +1075,8 @@ Layer 1 events address domain concerns: phase transitions, failure injection, mo
 changes. Layer 2+ events address sub-component-internal concerns: model transitions,
 convergence thresholds, internal mode switches.
 
-Actions declared in the system-level contract crate — such as system stop, pause, and
-resume actions (FPA-017) — are available at every layer because every partition
-transitively depends on the system-level contract crate. Actions declared in a
+Actions declared in the system-level contract crate are available at every layer because
+every partition transitively depends on the system-level contract crate. Actions declared in a
 partition's contract crate are available to events within that partition because the
 partition's implementation depends on its contract crate. The system-level contract
 crate's actions are available everywhere for the same reason its typed messages are
@@ -1078,9 +1090,9 @@ wherever the dependency graph reaches, handled by the partition whose dispatcher
 that scope.
 
 Without contract-crate scoping, the event system must either restrict actions to a
-hardcoded execution-state set — forcing partitions to encode domain logic procedurally
-rather than declaratively — or maintain a single global action registry that couples all
-partitions to each other's domain vocabulary. Contract-crate scoping avoids both: each
+hardcoded set — forcing partitions to encode domain logic procedurally rather than
+declaratively — or maintain a single global action registry that couples all partitions
+to each other's domain vocabulary. Contract-crate scoping avoids both: each
 contract crate owns its action namespace, the dependency graph determines visibility,
 and no global coordination is needed.
 
@@ -1106,6 +1118,48 @@ and no global coordination is needed.
 - Fail: Actions declared in the system-level contract crate use a different declaration
   mechanism, dispatch path, or configuration schema than actions declared in a
   partition's contract crate.
+
+---
+
+### FPA-040 — Contract Crate Naming and Documentation
+
+**Statement:** The contract crate at each layer shall follow the naming convention
+`<partition>-contract`, where `<partition>` is the short name of the system or partition
+that owns the contract. At layer 0, this is `<system>-contract` (e.g.,
+`universe-contract`). At layer 1, this is `<partition>-contract` (e.g.,
+`physics-contract`). When the contract crate is a module within a partition's crate
+rather than a standalone crate, the module shall be named `contract`.
+
+Each contract crate shall maintain a `docs/` directory following the same Diataxis
+documentation structure defined in FPA-030. The contract crate's
+`docs/design/SPECIFICATION.md` serves as the Interface Control Document (ICD) for that
+layer's inter-partition boundary. It specifies the types, traits, delivery semantics,
+shared state machines, and event action vocabularies exported by the contract crate. Its
+requirements trace to the parent layer's specification.
+
+**Rationale:** The contract crate is the single source of truth for inter-partition
+interfaces (FPA-003). A predictable naming convention makes the contract crate
+discoverable by inspection — a contributor encountering any partition can locate
+its contract crate without searching. Requiring the same Diataxis documentation
+structure as partitions ensures the interface is specified to the same standard as
+implementations, maintaining the layer and partition uniformity principle. The ICD is not
+a new document type — it is the contract crate's `SPECIFICATION.md`, containing
+requirements that trace upward to the parent layer's specification just as partition
+specifications do.
+
+**Verification Expectations:**
+- Pass: The system-level contract crate is named `<system>-contract` (or `contract` as a
+  module) and contains a `docs/design/SPECIFICATION.md` with requirements tracing to the
+  system specification.
+- Pass: A partition that decomposes into sub-partitions has a contract crate or module
+  named `<partition>-contract` (or `contract`) with a `docs/design/SPECIFICATION.md`
+  tracing to the partition specification.
+- Pass: The contract crate's `docs/` directory follows the same Diataxis structure
+  (tutorials, how-to, reference, explanation, design) used by partitions.
+- Fail: A contract crate has no `docs/design/SPECIFICATION.md` or its requirements do
+  not trace to the parent layer's specification.
+- Fail: The contract crate uses an ad-hoc name that does not identify it as a contract
+  crate by convention.
 
 ---
 
@@ -1137,3 +1191,4 @@ and no global coordination is needed.
 | FPA-027 | Partition-scoped Event Arming                                  |
 | FPA-028 | Event Definition in Configuration                              |
 | FPA-029 | Contract-crate-scoped Event Action Vocabulary                  |
+| FPA-040 | Contract Crate Naming and Documentation                        |

@@ -36,42 +36,42 @@ a failure in another.
 
 A **contract test** verifies that an implementation satisfies the contract defined at
 its layer. At layer 0, a contract test instantiates a partition implementation, invokes
-it through the traits defined in `sim-core`, and asserts that the outputs conform to the
-contract's behavioral requirements. At layer 1, a contract test does the same for a
-sub-partition implementation against the traits defined in the partition's contract
+it through the traits defined in the contract crate, and asserts that the outputs conform
+to the contract's behavioral requirements. At layer 1, a contract test does the same for
+a sub-partition implementation against the traits defined in the partition's contract
 module.
 
 Contract tests are what most frameworks call "unit tests," but the term is misleading
-here. A contract test for the physics partition might exercise a complete timestep
-involving gravity, atmosphere, and aerodynamics sub-models composed together. It is a
-"unit" only in the sense that it tests one unit of replaceability — one partition — in
-isolation from its peers at the same layer. The unit is not a function or a module. The
-unit is whatever the contract makes independently replaceable.
+here. A contract test for a partition might exercise a complete processing step
+involving multiple sub-partitions composed together. It is a "unit" only in the sense
+that it tests one unit of replaceability — one partition — in isolation from its peers
+at the same layer. The unit is not a function or a module. The unit is whatever the
+contract makes independently replaceable.
 
-The key property is **isolation at the contract boundary**. A contract test for the
-physics partition does not require a running GN&C partition, visualization partition, or
-UI partition. It supplies inputs that conform to the contract's input types and asserts
-outputs that conform to the contract's output types. The contract boundary is the
-isolation boundary.
+The key property is **isolation at the contract boundary**. A contract test for
+partition A does not require running partitions B, C, or D. It supplies inputs that
+conform to the contract's input types and asserts outputs that conform to the contract's
+output types. The contract boundary is the isolation boundary.
 
-At layer 1, the same structure applies. A contract test for the atmosphere sub-model
-within physics does not require the aerodynamics or gravity sub-models. It tests the
-atmosphere implementation against the atmosphere contract trait in isolation.
+At layer 1, the same structure applies. A contract test for sub-partition Alpha within
+partition A does not require sub-partitions Beta or Gamma. It tests the Alpha
+implementation against the Alpha contract trait in isolation.
 
 ### Compositor tests
 
 A **compositor test** verifies that the compositor at a given layer correctly assembles
 its partitions and that the assembled partitions interact correctly through their
-contracts. At layer 0, this means the orchestrator (`sim-app`) composes the four
+contracts. At layer 0, this means the system compositor composes the
 partitions and they exchange messages correctly through the bus. At layer 1, this means
-a partition's internal compositor assembles its sub-models and they interact correctly.
+a partition's internal compositor assembles its sub-partitions and they interact
+correctly.
 
 Compositor tests are what most frameworks call "integration tests." The distinction
 matters because a compositor test has a defined scope: it tests one layer's assembly,
-not the entire system. A layer 0 compositor test verifies that the four partitions
-communicate correctly through `sim-core` contracts and the bus. It does not verify the
-internal correctness of each partition's sub-models — that is the job of layer 1
-contract tests.
+not the entire system. A layer 0 compositor test verifies that the partitions
+communicate correctly through the contract crate's defined contracts and the bus. It
+does not verify the internal correctness of each partition's sub-partitions — that is
+the job of layer 1 contract tests.
 
 This scope discipline prevents the common failure mode of integration tests: testing
 everything at once, so that failures are difficult to localize and tests are slow and
@@ -83,20 +83,19 @@ tests composition, not implementation.
 A **system test** exercises the full stack within a system's scope boundary, from
 configuration to final output, using the same entry point an operator or caller would
 use. System tests verify end-to-end properties that emerge from the interaction of all
-layers within that system: a vehicle launched with specific initial conditions reaches
-a specific final state; a scenario with scripted events produces the expected sequence
-of execution state transitions; telemetry output from a complete run matches a
-reference.
+layers within that system: a run with specific initial conditions reaches a specific
+final state; a scenario with scripted events produces the expected sequence of execution
+state transitions; output from a complete run matches a reference.
 
 System tests are distinguished from compositor tests by two properties. First, they
-use the system's public entry points — session fragments, orchestrator API, CLI — not
-internal assembly interfaces. A compositor test calls the compositor directly and
+use the system's public entry points — configuration fragments, compositor API, CLI —
+not internal assembly interfaces. A compositor test calls the compositor directly and
 inspects the assembled result. A system test submits a configuration and observes the
 output, the same way an operator would. Second, system tests trace to the system's own
 specification requirements. Each system test verifies one or more requirements from
-that system's SPECIFICATION.md. Their purpose is not to catch bugs in individual
-partitions — contract tests do that — but to verify that the requirements are met
-when all partitions are composed together.
+that system's SPECIFICATION.md (see FPA-SRS-000). Their purpose is not to catch bugs
+in individual partitions — contract tests do that — but to verify that the
+requirements are met when all partitions are composed together.
 
 System tests are expensive and slow relative to contract tests. Their role in the test
 pyramid is to be few in number, high in confidence, and directly tied to requirements
@@ -104,26 +103,26 @@ traceability.
 
 ### System tests are relative to system scope
 
-The current document says "system tests exist only at layer 0," and this is true — but
-layer 0 is relative. Every system that applies the fractal partition pattern has its own
-layer 0, and therefore its own system tests.
+The specification (FPA-SRS-000) states that system tests exist only at layer 0, and
+this is true — but layer 0 is relative. Every system that applies the fractal partition
+pattern has its own layer 0, and therefore its own system tests.
 
-Universe's system tests exercise the full simulation stack: session configuration in,
-telemetry and final state out. They trace to SIM-SYS requirements. When universe runs
-standalone, these are the outermost tests.
+Consider a system called "inner-system" whose system tests exercise the full processing
+stack: configuration in, results out. They trace to inner-system's FPA requirements.
+When inner-system runs standalone, these are the outermost tests.
 
-Now consider a laboratory automation pipeline that uses universe as a partition — one
-stage in a pre-process/simulate/post-process workflow. From the pipeline's perspective,
-universe is a layer 1 partition. The pipeline has its own layer 0 compositor tests
-verifying that pre-processing, simulation, and post-processing interact correctly. And
-the pipeline has its own system tests, exercising the full pipeline from experiment
-configuration to published results, tracing to the pipeline's own requirements.
+Now consider a larger pipeline that uses inner-system as a partition — one stage in a
+pre-process/compute/post-process workflow. From the pipeline's perspective, inner-system
+is a layer 1 partition. The pipeline has its own layer 0 compositor tests verifying that
+pre-processing, computation, and post-processing interact correctly. And the pipeline
+has its own system tests, exercising the full pipeline from input configuration to
+published results, tracing to the pipeline's own requirements.
 
-Universe's system tests do not disappear in this scenario. They remain universe's system
-tests — they verify that universe meets its own requirements at its own scope boundary.
-The pipeline's system tests verify something different: that the pipeline meets the
-pipeline's requirements. These are different systems with different layer 0 boundaries,
-and each has system tests appropriate to its scope.
+Inner-system's system tests do not disappear in this scenario. They remain
+inner-system's system tests — they verify that inner-system meets its own requirements
+at its own scope boundary. The pipeline's system tests verify something different: that
+the pipeline meets the pipeline's requirements. These are different systems with
+different layer 0 boundaries, and each has system tests appropriate to its scope.
 
 This is the fractal property applied to testing. Just as a partition's internal structure
 mirrors the system's structure, a partition's test suite mirrors the system's test suite.
@@ -151,7 +150,7 @@ The three test types form a pyramid that mirrors the layer structure:
 
 There are two equivalent ways to describe where a test belongs. You can describe it
 from above — "layer 0 contract tests verify the layer 1 partitions" — or from within —
-"these contract tests live inside the physics partition's test suite." These are the
+"these contract tests live inside partition A's test suite." These are the
 same tests seen from different vantage points. The "from above" view emphasizes what
 the tests verify (the next layer down). The "from within" view emphasizes where the
 tests live (inside the partition that owns the contract). Both are useful. The summary
@@ -165,18 +164,18 @@ At each layer N within a given system:
   through the system's public interface.
 
 Because the fractal pattern allows arbitrary depth, the contract/compositor pair
-repeats at every layer. Layer 1 contract tests verify sub-model implementations.
+repeats at every layer. Layer 1 contract tests verify sub-partition implementations.
 Layer 1 compositor tests verify that the partition's internal compositor assembles
-sub-models correctly. Layer 2 contract tests verify sub-sub-model implementations,
-and so on.
+sub-partitions correctly. Layer 2 contract tests verify sub-sub-partition
+implementations, and so on.
 
 When a partition is itself a system — complex enough to have its own specification,
-its own compositor, and its own public API — it carries its own test pyramid. Universe
-has contract tests (verifying each of its four partitions), compositor tests (verifying
-the orchestrator assembles them correctly), and system tests (verifying SIM-SYS
-requirements end-to-end). The physics partition, if complex enough, could have contract
-tests (verifying each sub-model), compositor tests (verifying sub-model assembly), and
-its own system tests (verifying SIM-PHY requirements through the physics partition's
+its own compositor, and its own public API — it carries its own test pyramid. A system
+has contract tests (verifying each of its partitions), compositor tests (verifying the
+compositor assembles them correctly), and system tests (verifying the system's FPA
+requirements end-to-end). A partition, if complex enough, could have contract tests
+(verifying each sub-partition), compositor tests (verifying sub-partition assembly),
+and its own system tests (verifying partition-level requirements through the partition's
 public interface). The structure recurses as deep as the domain warrants.
 
 ## What emerges from the pattern
@@ -194,12 +193,12 @@ test must assert (for correctness). A single artifact serves both purposes.
 
 ### Alternative implementations are testable by construction
 
-When a contributor provides an alternative implementation of a partition — a student's
-GN&C plugin, a lab's custom atmosphere model — the contract tests for that partition's
-contract apply unchanged. The test suite for the atmosphere contract verifies any
-atmosphere implementation, not just the default one. If the alternative passes the
-contract tests, it is a valid replacement. If it doesn't, the failures identify exactly
-which contract obligations are unmet.
+When a contributor provides an alternative implementation of a partition — a third-party
+plugin, a team's custom sub-partition — the contract tests for that partition's contract
+apply unchanged. The test suite for a contract verifies any conforming implementation,
+not just the default one. If the alternative passes the contract tests, it is a valid
+replacement. If it doesn't, the failures identify exactly which contract obligations
+are unmet.
 
 This eliminates the common problem of alternative implementations that "mostly work"
 but fail in edge cases that aren't covered by ad-hoc tests. The contract tests are
@@ -208,34 +207,36 @@ of what an implementation must do.
 
 ### Transport independence is testable
 
-The requirement that all three transport modes produce identical results (SIM-SYS-005)
-becomes a compositor test parameterized over transport mode. The same scenario runs
-three times — in-process, async, networked — and the final vehicle state is compared.
+The requirement that all transport modes produce identical results (FPA-004) becomes a
+compositor test parameterized over transport mode. The same scenario runs with each
+supported transport — in-process, async, networked — and the final state is compared.
 This test exists at layer 0 because transport is a layer 0 concern. Layer 1 tests are
 unaware of transport because layer 1 partitions are unaware of transport.
 
 ### Fidelity tiers are testable without special machinery
 
-A fidelity tier is a named composition fragment that selects a set of sub-model
+A fidelity tier is a named composition fragment that selects a set of sub-partition
 implementations. Testing a fidelity tier is a compositor test at layer 1: compose the
-sub-models selected by the tier, run a reference scenario, and compare outputs against
-the expected reference for that fidelity level. No fidelity-specific test infrastructure
-is needed — it is the same compositor test with a different composition fragment input.
+sub-partitions selected by the tier, run a reference scenario, and compare outputs
+against the expected reference for that fidelity level. No fidelity-specific test
+infrastructure is needed — it is the same compositor test with a different composition
+fragment input.
 
 ### Snapshot round-trip is testable
 
-State snapshot dump and load (SIM-SYS-044) is testable as a compositor test: run a
-scenario to time T, dump state, load the dumped state into a fresh simulation, continue
-to time T+N, and compare the result with a continuous run from 0 to T+N. Because state
-snapshots are composition fragments, the dump output is human-readable and diffable,
-making test failures diagnosable.
+State snapshot dump and load (FPA-023) is testable as a compositor test: run a scenario
+to time T, dump state, load the dumped state into a fresh instance, continue to time
+T+N, and compare the result with a continuous run from 0 to T+N. Because state snapshots
+are composition fragments, the dump output is human-readable and diffable, making test
+failures diagnosable.
 
 ### Test reference data follows contract boundaries
 
 The testing structure creates a reference data management concern: tests at every layer
 need inputs to supply and outputs to expect, and a contract change at one layer can
 propagate upward through compositor and system test references. The architecture that
-addresses this is specified in SIM-SYS-051 through SIM-SYS-054 and explained in full in
+addresses this is specified in FPA-CON-000 (FPA-036 through FPA-039) and explained in
+full in
 [Test Reference Data in the Fractal Partition Pattern](test-reference-data-in-the-fractal-partition-pattern.md).
 
 The core principle is that reference data ownership follows the same boundaries as
@@ -267,36 +268,37 @@ it constructs instances of the contract's input types directly — this is not a
 is using the contract's type system as intended.
 
 There is a cost: contract tests for complex partitions may require nontrivial input
-construction. A physics contract test must supply a plausible `GNCCommand` as input.
-This is more work than mocking a `GNCCommandProvider` trait. The tradeoff is that the
-test exercises the actual contract boundary and cannot silently diverge from the real
-interface.
+construction. A contract test for partition A must supply a plausible input message
+matching partition B's output type. This is more work than mocking a provider trait.
+The tradeoff is that the test exercises the actual contract boundary and cannot silently
+diverge from the real interface.
 
 ### Why compositor tests have a defined scope
 
 It would be simpler to have two levels — unit tests and end-to-end tests — without the
 intermediate compositor test. The problem is that end-to-end tests are slow, brittle,
 and hard to debug. When an end-to-end test fails, the failure could be in any partition,
-any sub-model, or in the composition itself. Localizing the failure requires
+any sub-partition, or in the composition itself. Localizing the failure requires
 investigation that the test structure doesn't help with.
 
 Compositor tests localize composition failures to a specific layer. If a layer 0
 compositor test fails but all layer 1 contract tests pass, the problem is in the
-inter-partition communication or the orchestrator's assembly logic, not in any
+inter-partition communication or the compositor's assembly logic, not in any
 partition's internal implementation. This diagnostic property is worth the additional
 test category.
 
 ### Why system tests trace to requirements
 
-System tests could be organized by scenario, by vehicle type, or by feature. Organizing
+System tests could be organized by scenario, by workload type, or by feature. Organizing
 them by requirement — each system test traces to one or more requirement identifiers from
 the system's own specification — has a specific benefit: coverage analysis is trivial. If
 every requirement has at least one system test, and all system tests pass, the system
 satisfies its specification. If a requirement has no system test, the gap is visible in
 the traceability matrix.
 
-This traceability applies at every scope where system tests exist. Universe's system
-tests trace to SIM-SYS requirements. If the physics partition maintains its own system
-tests, they trace to SIM-PHY requirements. A laboratory pipeline that embeds universe
-would have system tests tracing to the pipeline's own requirement identifiers. The
-discipline is the same; the scope boundary determines which requirements are relevant.
+This traceability applies at every scope where system tests exist. A system's tests
+trace to that system's FPA requirements. If a partition maintains its own system tests,
+they trace to that partition's requirements. A larger pipeline that embeds the system as
+a partition would have system tests tracing to the pipeline's own requirement
+identifiers. The discipline is the same; the scope boundary determines which
+requirements are relevant.

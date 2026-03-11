@@ -16,9 +16,8 @@
 
 1. Purpose and Scope
 2. Tick Lifecycle
-3. Execution State Machine
-4. Verification and Testing Discipline
-5. Requirements Index
+3. Verification and Testing Discipline
+4. Requirements Index
 
 ---
 
@@ -39,16 +38,11 @@ defined here:
 - [Test Reference Data in the Fractal Partition Pattern](../explanation/test-reference-data-in-the-fractal-partition-pattern.md)
 - [Conventions in the Fractal Partition Pattern](../explanation/conventions-in-the-fractal-partition-pattern.md)
 
-The conventions are grouped into three areas:
+The conventions are grouped into two areas:
 
 - **Tick lifecycle** (FPA-014): A double-buffered execution model that produces
   deterministic, ordering-insensitive results. See the companion explanation:
   [Tick Lifecycle and Synchronization](../explanation/tick-lifecycle-and-synchronization.md).
-
-- **Execution state machine** (FPA-015 through FPA-018): A specific shared state machine
-  for systems that "play" something with its own timeline — simulation, streaming,
-  playback. This is one instance of the shared state machine synchronization pattern
-  (FPA-006) and demonstrates how that core mechanism can be applied.
 
 - **Verification and testing discipline** (FPA-030 through FPA-039): A testing
   methodology and traceability discipline that leverages the partition structure. The
@@ -139,7 +133,8 @@ invariants:
    tick.
 2. Collect tick N outputs from all partitions.
 3. Process bus requests (execution state transition requests, etc.) received during this
-   tick. Arbitrate conflicting requests per FPA-018.
+   tick. Arbitrate conflicting requests using a deterministic, transport-independent
+   priority rule defined by the domain-specific specification.
 4. Relay qualified requests to the outer bus per FPA-010.
 5. Check for pending direct signals.
 
@@ -216,207 +211,15 @@ events see a snapshot of partition state.
 
 ---
 
-## 3. Execution State Machine
-
----
-
-### FPA-015 — Execution State Machine
-
-**Statement:** The system shall define a formal execution state machine in the
-system-level contract crate with the following states and transitions:
-
-| State     | Valid Transitions                        |
-|-----------|------------------------------------------|
-| Idle      | -> Running (start)                       |
-| Running   | -> Paused (pause), -> Stopped (stop)     |
-| Paused    | -> Running (resume), -> Stopped (stop)   |
-| Stopped   | -> Idle (reset)                          |
-
-The current execution state shall be available as a named resource or type in the
-contract crate accessible to all partitions. No partition shall maintain a private copy
-of the execution state that diverges from the authoritative value held by the
-orchestrator.
-
-This state machine is one instance of the shared state machine synchronization pattern
-(FPA-006) at layer 0. Domain-specific systems may define additional shared state machines
-at any layer using the same pattern.
-
-**Rationale:** In a fractally partitioned
-system, any partition at any layer may need to observe or influence the execution
-lifecycle. Without a formal state machine, partitions cannot consistently reason about
-valid transitions, detect invalid requests, or synchronize their behavior with the
-global execution lifecycle. An explicit, centrally defined state machine prevents
-undefined behavior when multiple sources (UI, events, partition logic) attempt to
-influence execution state.
-
-**Verification Expectations:**
-- Pass: The contract crate exports an enum or equivalent type representing the four
-  execution states (Idle, Running, Paused, Stopped) and a function or method that
-  validates whether a requested transition is valid from the current state.
-- Pass: Requesting an invalid transition (e.g., Running -> Idle) returns an error or
-  rejection rather than silently succeeding.
-- Pass: All partitions read execution state from the same contract crate resource; no
-  partition defines its own execution state enum.
-- Fail: The execution state is represented as a bare boolean or integer flag without
-  enforced transition semantics.
-
----
-
-### FPA-016 — Execution State Transition Requests
-
-**Statement:** Any partition shall be capable of requesting an execution state
-transition by emitting a typed execution state request message on its layer's bus. The
-request type shall be defined in the system-level contract crate and shall carry the
-requested transition and the identity of the requesting partition. At layer 0, the
-orchestrator receives requests directly on the layer 0 bus and is the sole authority for
-evaluating and applying state transitions according to the state machine defined in
-FPA-015. At deeper layers, requests emitted on an inner bus are received by the
-compositor at that layer, which relays them to the outer bus according to its relay
-authority (see FPA-010). The request propagates through the compositor relay chain
-until it reaches the layer 0 orchestrator for arbitration. Requests that represent
-invalid transitions shall be logged with the requesting partition's identity and ignored.
-Valid transitions shall take effect within one tick of receipt at the
-orchestrator. Because requests from deeper layers traverse the compositor relay chain,
-a request emitted at layer N may take up to N ticks to reach the orchestrator.
-Safety-critical signals that cannot tolerate relay latency shall use the direct signal
-mechanism (FPA-013) instead.
-
-**Rationale:** The fractal partition pattern (FPA-001) implies that partitions at
-any layer may generate events that affect execution state. Multiple sources may
-legitimately need to change execution state: a UI partition for interactive control, a
-partition detecting a safety limit exceedance, an event handler reaching a scripted
-pause point, or a condition-triggered event firing a stop. Because buses are
-layer-scoped (FPA-008), requests from inner layers reach the orchestrator through
-compositor relay rather than direct emission on a global bus. Each compositor in the
-relay chain may add context or transform the request (FPA-010), ensuring that the
-outer layer sees only what the compositor's contract promises. The relay chain introduces
-latency proportional to layer depth — each compositor processes its inner bus during its
-own `step()` and relays on the next outer-bus read cycle. This latency is acceptable for
-normal execution state transitions; safety-critical scenarios that require immediate
-response use direct signals (FPA-013), which bypass the relay chain entirely. The
-orchestrator remains the single arbitration point for execution state changes.
-
-**Verification Expectations:**
-- Pass: A layer 0 partition emitting an execution state stop request during a
-  Running state causes the orchestrator to transition to the Stopped state within
-  one tick.
-- Pass: A layer 0 partition emitting an execution state pause request during a
-  Running state causes the orchestrator to transition to the Paused state within
-  one tick.
-- Pass: A layer 1 sub-partition emitting an execution state stop request on the layer 1
-  bus causes the compositor to relay the request to the layer 0 bus, where the
-  orchestrator arbitrates and transitions to the Stopped state.
-- Pass: An execution state resume request emitted while the system is in the
-  Running state is logged as an invalid transition and ignored; the system continues
-  running without interruption.
-- Pass: Each applied transition is logged with the identity of the partition that
-  requested it.
-- Fail: A partition directly mutates the execution state resource without emitting a
-  request on the bus.
-- Fail: A sub-partition at layer 1 or deeper emits an execution state request directly
-  on the layer 0 bus, bypassing its compositor's relay authority.
-- Fail: Two partitions emitting conflicting requests in the same tick causes undefined
-  behavior (see FPA-018 for conflict resolution).
-
----
-
-### FPA-017 — Execution State Change as Event Action
-
-**Statement:** The system-level contract crate shall declare `"sys_pause"`, `"sys_stop"`,
-and `"sys_resume"` (or equivalent action identifiers) as event action identifiers in its
-contract-crate action vocabulary. When an event with one of these action identifiers
-fires, the event dispatcher shall emit the corresponding execution state request on the
-bus at the layer where the event is defined. At layer 0, this reaches the orchestrator
-directly. At layer 1 or deeper, the request follows the compositor relay chain
-(FPA-010, FPA-016) to reach the orchestrator for arbitration. These actions shall be
-usable with both time-triggered and condition-triggered events.
-
-**Rationale:** Execution state transitions are event actions declared in the
-system-level contract crate using the same contract-crate action vocabulary mechanism as
-any other event action (FPA-029). Because every partition in the system depends on the
-system-level contract crate, these actions are available at every layer — the
-contract-crate dependency graph makes them visible everywhere. Their handlers emit typed
-bus messages (execution state requests) that enter the arbitration pipeline. Encoding
-pause points, safety stops, or phase transitions as event actions keeps the logic
-declarative and configurable in composition fragments, avoiding hard-coded procedural
-checks in partition source code. Connecting the event system to the execution state
-request mechanism (FPA-016) ensures all event-driven state changes flow through the same
-arbitration path as UI-initiated changes. Because buses are layer-scoped (FPA-008),
-event-driven requests at inner layers reach the orchestrator through the same compositor
-relay path as all other inter-layer requests.
-
-**Verification Expectations:**
-- Pass: A configuration entry for a partition-level event with a time trigger and
-  `action = "sys_pause"` (or equivalent) causes the system to pause when the partition's
-  clock reaches the specified time.
-- Pass: A configuration entry for a partition-level event with a condition trigger and
-  `action = "sys_stop"` (or equivalent) causes the system to stop when the monitored
-  signal exceeds the threshold.
-- Pass: A system-level event entry with `action = "sys_resume"` (or equivalent) and a
-  time trigger successfully resumes a paused system at the specified time.
-- Pass: The execution state request emitted by an event action is indistinguishable from
-  one emitted by a UI partition or by partition code directly; the orchestrator processes
-  it identically.
-- Fail: Execution state change actions require partition source code modifications
-  rather than configuration.
-
----
-
-### FPA-018 — Execution State Transition Conflict Resolution
-
-**Statement:** When the orchestrator receives multiple execution state request messages
-within the same tick that request conflicting transitions, it shall apply the
-following deterministic priority order: (1) Stop takes priority over all other requests.
-(2) Pause takes priority over Resume. (3) Among requests of equal priority, the request
-shall be designated the primary request for logging purposes using a deterministic,
-transport-independent rule (the specific tie-breaking mechanism is
-implementation-defined). All valid requests of the same type shall be applied (the
-outcome is the same regardless of which is designated primary). All received requests
-and the resolution outcome shall be logged with the requesting partition identities.
-
-**Rationale:** In a fractally partitioned system, any partition at any layer may
-generate events that request execution state changes. Concurrent events may independently
-request conflicting transitions in the same tick — for example, one partition requesting
-pause while another partition simultaneously requests stop. Without a deterministic
-resolution policy, the resulting execution state would depend on message ordering, which
-varies with transport mode and scheduling. Prioritizing stop over pause reflects the
-principle that safety-critical transitions should not be overridden by less severe
-requests. Tie-breaking by a deterministic, transport-independent rule rather than
-arrival order ensures that audit logs are reproducible across transport modes and
-deployment configurations.
-
-**Verification Expectations:**
-- Pass: When one partition emits an execution state stop request and another partition
-  emits an execution state pause request in the same tick, the orchestrator transitions
-  to Stopped.
-- Pass: When one partition emits an execution state resume request and another partition
-  emits an execution state pause request in the same tick, the orchestrator transitions
-  to Paused (if currently Paused, the pause wins and the state remains Paused).
-- Pass: When two partitions emit execution state pause requests in the same tick, the
-  same partition is deterministically logged as the primary request regardless of
-  transport mode; the outcome (Paused) is the same regardless of which is designated.
-- Pass: The orchestrator log for the tick includes both requests and identifies which
-  was applied and which was superseded, with partition identities.
-- Pass: The audit log for a given configuration is identical across synchronous, async, and
-  network transport modes.
-- Fail: Conflicting requests in the same tick produce non-deterministic behavior
-  depending on transport mode or thread scheduling.
-- Fail: A lower-priority request silently overrides a higher-priority request without
-  logging.
-- Fail: Equal-priority requests from different partitions produce different audit log
-  entries depending on transport mode.
-
----
-
-## 4. Verification and Testing Discipline
+## 3. Verification and Testing Discipline
 
 ---
 
 ### FPA-030 — Partition-level Specifications and Documentation Structure
 
-**Statement:** Each partition shall maintain a `docs/` directory whose structure
-follows the Diataxis documentation framework and is uniform across all partitions at
-all layers:
+**Statement:** Each partition and each contract crate shall maintain a `docs/` directory
+whose structure follows the Diataxis documentation framework and is uniform across all
+partitions and contract crates at all layers:
 
 | Directory             | Diataxis Quadrant | Content                                    |
 |-----------------------|-------------------|--------------------------------------------|
@@ -436,18 +239,19 @@ depth.
 
 **Rationale:** The fractal partition pattern requires that specification structure and
 documentation structure propagate uniformly to every layer of decomposition. A Diataxis-
-aligned `docs/` folder ensures that each partition — regardless of its layer — presents
-its documentation in the same four quadrants. A contributor navigating from a system-
-level partition into its sub-partition finds the same documentation
-layout, the same specification format, and the same traceability conventions.
+aligned `docs/` folder ensures that each partition and contract crate — regardless of
+its layer — presents its documentation in the same four quadrants. A contributor
+navigating from a system-level partition into its sub-partition, or from a partition
+into its contract crate, finds the same documentation layout, the same specification
+format, and the same traceability conventions.
 Bidirectional traceability between each layer's specification and the layer above ensures
 that all intents are verifiably allocated downward and no requirement is orphaned from
 its parent.
 
 **Verification Expectations:**
-- Pass: Every partition's `docs/` directory contains the five subdirectories listed
-  above (directories may be empty if no content exists yet, but the structure is
-  present).
+- Pass: Every partition's and contract crate's `docs/` directory contains the five
+  subdirectories listed above (directories may be empty if no content exists yet, but
+  the structure is present).
 - Pass: Every requirement in each partition's `SPECIFICATION.md` includes a `Traces to:`
   field referencing at least one identifier in the parent layer's specification.
 - Pass: Every requirement in this document is referenced by at least one partition-level
@@ -764,15 +568,11 @@ migrate on their own schedule while maintaining test coverage throughout the tra
 
 ---
 
-## 5. Requirements Index
+## 4. Requirements Index
 
 | ID      | Title                                                          |
 |---------|----------------------------------------------------------------|
 | FPA-014 | Compositor Tick Lifecycle                                      |
-| FPA-015 | Execution State Machine                                        |
-| FPA-016 | Execution State Transition Requests                            |
-| FPA-017 | Execution State Change as Event Action                         |
-| FPA-018 | Execution State Transition Conflict Resolution                 |
 | FPA-030 | Partition-level Specifications and Documentation Structure     |
 | FPA-031 | Test Coverage of Requirements                                  |
 | FPA-032 | Contract Tests at Every Layer                                  |

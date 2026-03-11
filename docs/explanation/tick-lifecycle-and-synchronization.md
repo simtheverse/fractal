@@ -1,8 +1,8 @@
 # The Tick Lifecycle and Synchronization Model
 
-This document explains the compositor tick lifecycle (SIM-SYS-062) and bus delivery
-semantics (SIM-SYS-063) — the synchronization model that ensures transport-independent
-simulation behavior.
+This document explains the compositor tick lifecycle (FPA-014) and bus delivery
+semantics (FPA-007) — the synchronization model that ensures transport-independent
+system behavior.
 
 ## The Problem: When Is Communication Visible?
 
@@ -19,15 +19,15 @@ Under async or network transport, partitions may step concurrently, in different
 or at different rates. A message published by partition A might arrive at partition B
 before, during, or after B's `step()` call, depending on thread scheduling and network
 latency. If the in-process mode allows B to see A's current-tick output but the async
-mode does not (or vice versa), the two modes produce different simulation results —
-violating the transport independence guarantee (SIM-SYS-005).
+mode does not (or vice versa), the two modes produce different results —
+violating the transport independence guarantee (FPA-004).
 
 The tick lifecycle resolves this by defining explicit phases within each tick, with
 precise rules about when messages are visible.
 
 ## The Three-Phase Tick Lifecycle
 
-*Specified in SIM-SYS-062.*
+*Specified in FPA-014.*
 
 Every compositor — at every layer — executes each tick as three sequential phases:
 
@@ -38,15 +38,14 @@ Every compositor — at every layer — executes each tick as three sequential p
  │  Phase 1: Pre-tick                            │
  │  ┌─────────────────────────────────────────┐  │
  │  │ Check direct signals                    │  │
- │  │ Process spawn/despawn requests          │  │
+ │  │ Process lifecycle operations            │  │
  │  │ Process dump/load requests              │  │
- │  │ Assemble WorldState from tick N-1       │  │
- │  │ Publish WorldState, ExecutionState,     │  │
- │  │   and shared context (into write buffer)│  │
+ │  │ Assemble shared context from tick N-1   │  │
+ │  │ Publish shared context, execution       │  │
+ │  │   state (into write buffer)             │  │
  │  │ Swap read/write buffers                 │  │
  │  │   new read buffer = tick N-1 outputs +  │  │
- │  │     WorldState + ExecutionState +       │  │
- │  │     shared context                      │  │
+ │  │     shared context + execution state    │  │
  │  │   new write buffer = cleared for tick N │  │
  │  └─────────────────────────────────────────┘  │
  │                                               │
@@ -54,8 +53,8 @@ Every compositor — at every layer — executes each tick as three sequential p
  │  ┌─────────────────────────────────────────┐  │
  │  │ for each partition:                     │  │
  │  │   read from read buffer                 │  │
- │  │     (tick N-1 outputs, WorldState,      │  │
- │  │      ExecutionState, shared context)    │  │
+ │  │     (tick N-1 outputs, shared context,  │  │
+ │  │      execution state)                   │  │
  │  │   step(dt)                              │  │
  │  │   write to write buffer                 │  │
  │  │   check direct signals                  │  │
@@ -86,31 +85,30 @@ the entire system:
 **Direct signals** are checked first. A safety-critical signal that arrived during the
 previous tick is processed before any new computation begins.
 
-**Spawn and despawn requests** (SIM-SYS-010) are processed here so that all partitions
-in the upcoming tick see the same set of active vehicles. If spawn were processed
-mid-tick, some partitions would see the new vehicle and others would not.
+**Lifecycle operations** are processed here so that all partitions in the upcoming tick
+see the same set of active entities. If a lifecycle operation were processed mid-tick,
+some partitions would see the new entity and others would not.
 
-**Dump and load requests** (SIM-SYS-045) are processed at the tick boundary so that
+**Dump and load requests** (FPA-023) are processed at the tick boundary so that
 state snapshots capture temporally consistent data — every partition's contribution
 comes from the same completed tick.
 
-**WorldState assembly** (SIM-SYS-009) collects all partition outputs from tick N-1 and
-publishes them as an atomic aggregate. The tick barrier ensures that no partition's
-output is missing or stale.
+**Shared context assembly** collects all partition outputs from tick N-1 and publishes
+them as an atomic aggregate. The tick barrier ensures that no partition's output is
+missing or stale.
 
-**WorldState, ExecutionState, and shared context** are published into the buffer that
-will become the read buffer for tick N after the upcoming buffer swap — the buffer
-that partitions will read from during Phase 2. This ensures these values are stable
-and visible to all partitions throughout Phase 2.
+**Shared context and execution state** are published into the buffer that will become
+the read buffer for tick N after the upcoming buffer swap — the buffer that partitions
+will read from during Phase 2. This ensures these values are stable and visible to all
+partitions throughout Phase 2.
 
 **Buffer swap** transitions the double-buffer: after the swap, the read buffer for
-tick N contains tick N-1 partition outputs plus the WorldState, ExecutionState, and
-shared context published above, and a fresh write buffer is prepared for tick N
-outputs.
+tick N contains tick N-1 partition outputs plus the shared context and execution state
+published above, and a fresh write buffer is prepared for tick N outputs.
 
 ### Phase 2: Partition Stepping — Intra-tick Message Isolation
 
-Phase 2 is the core simulation work. The normative model is sequential: the compositor
+Phase 2 is the core computation work. The normative model is sequential: the compositor
 calls `step(dt)` on each partition one at a time, in a deterministic order that is
 stable across ticks. Between each partition's step, the compositor checks for direct
 signals — giving safety-critical signals a worst-case latency of one partition's step
@@ -129,8 +127,8 @@ write paths, and all readers see the same immutable tick N-1 buffer. The invaria
 that must hold are: write paths don't contend, bus requests are collected thread-safely,
 all steps complete before Phase 3 (the tick barrier), and direct signals are checked at
 least once before Phase 3 (worst-case latency becomes the longest partition's step
-duration rather than one partition's). The simulation result is identical to sequential
-stepping — the double-buffer guarantees this.
+duration rather than one partition's). The result is identical to sequential stepping —
+the double-buffer guarantees this.
 
 The key invariant is **intra-tick message isolation**:
 
@@ -144,27 +142,27 @@ of step order. This is the double-buffered approach:
 ```
 Tick N-1 outputs (read buffer):
   ┌──────────┐  ┌──────────┐  ┌──────────┐
-  │ Physics  │  │  GN&C    │  │   Env    │
+  │ Part. A  │  │ Part. B  │  │ Part. C  │
   │ output   │  │  output  │  │  output  │
   │ (N-1)    │  │  (N-1)   │  │  (N-1)   │
   └────┬─────┘  └────┬─────┘  └────┬─────┘
        │read         │read         │read
   ┌────▼─────┐  ┌────▼─────┐  ┌────▼─────┐
-  │ Physics  │  │  GN&C    │  │   Env    │
-  │ step(dt) │  │  step(dt)│  │  step(dt)│
+  │ Part. A  │  │ Part. B  │  │ Part. C  │
+  │ step(dt) │  │ step(dt) │  │ step(dt) │
   └────┬─────┘  └────┬─────┘  └────┬─────┘
        │write        │write        │write
   ┌────▼─────┐  ┌────▼─────┐  ┌────▼─────┐
-  │ Physics  │  │  GN&C    │  │   Env    │
+  │ Part. A  │  │ Part. B  │  │ Part. C  │
   │ output   │  │  output  │  │  output  │
   │ (N)      │  │  (N)     │  │  (N)     │
   └──────────┘  └──────────┘  └──────────┘
 Tick N outputs (write buffer)
 ```
 
-This eliminates ordering sensitivity entirely. Whether Physics steps before or after
-GN&C, both read the same tick N-1 data and produce the same outputs. The simulation
-result is identical regardless of step order — which is exactly what makes the transport
+This eliminates ordering sensitivity entirely. Whether partition A steps before or after
+partition B, both read the same tick N-1 data and produce the same outputs. The result
+is identical regardless of step order — which is exactly what makes the transport
 independence guarantee enforceable, because different transport modes may step partitions
 in different orders or concurrently.
 
@@ -187,14 +185,14 @@ other event conditions until the following tick. This is consistent with the
 double-buffered approach — events see a snapshot of state, just as partitions see a
 snapshot of inter-partition data.
 
-**Bus request processing** handles `ExecutionStateRequest` messages and other requests
-emitted during the tick, with conflict resolution per SIM-SYS-043.
+**Bus request processing** handles state transition requests and other requests emitted
+during the tick, with conflict resolution per FPA-006.
 
-**Relay** forwards qualified requests to the outer bus per SIM-SYS-057.
+**Relay** forwards qualified requests to the outer bus per FPA-010.
 
 ## Bus Delivery Semantics
 
-*Specified in SIM-SYS-063.*
+*Specified in FPA-007.*
 
 The tick lifecycle defines when messages are visible. Delivery semantics define *how
 many* messages a consumer sees, addressing what happens when a producer publishes faster
@@ -204,25 +202,25 @@ Each message type declares its delivery semantic in the contract crate as part o
 interface contract. The key distinction is between continuous state messages (where the
 consumer only needs the current value) and request messages (where every instance must
 be processed and dropping one is a correctness failure). Under async transport with
-partitions at different rates (SIM-SYS-013), this distinction determines whether a
-backlog accumulates. The declared semantic must behave identically across all transport
-modes, supporting the transport independence guarantee.
+partitions at different rates, this distinction determines whether a backlog
+accumulates. The declared semantic must behave identically across all transport modes,
+supporting the transport independence guarantee.
 
 ## Relationship to Other Architecture Elements
 
 The tick lifecycle is the compositor's runtime contract — it extends the compositor
-runtime role (SIM-SYS-056) with precise timing semantics. It integrates with:
+runtime role (FPA-009) with precise timing semantics. It integrates with:
 
-- **Layer-scoped buses** (SIM-SYS-055): The double-buffer operates per bus instance.
+- **Layer-scoped buses** (FPA-008): The double-buffer operates per bus instance.
   Each compositor at each layer runs its own tick lifecycle on its own bus.
-- **Direct signals** (SIM-SYS-060): Polling between partition steps gives signals
+- **Direct signals** (FPA-013): Polling between partition steps gives signals
   sub-tick latency while avoiding reentrancy hazards.
-- **Recursive state contribution** (SIM-SYS-059): The tick boundary in Phase 1 ensures
+- **Recursive state contribution** (FPA-012): The tick boundary in Phase 1 ensures
   that `contribute_state()` calls observe consistent, completed state.
-- **Compositor fault handling** (SIM-SYS-058): Faults during any trait call in any
+- **Compositor fault handling** (FPA-011): Faults during any trait call in any
   phase are caught by the compositor, wrapped with diagnostic context, and propagated
   upward — the compositor does not silently absorb failures.
-- **Transport abstraction** (SIM-SYS-005): The lifecycle is the mechanism that makes
+- **Transport abstraction** (FPA-004): The lifecycle is the mechanism that makes
   the transport independence guarantee enforceable — by isolating partitions from
   each other's current-tick outputs, the result becomes independent of step order and
   timing, which is what varies across transport modes.
@@ -231,15 +229,15 @@ runtime role (SIM-SYS-056) with precise timing semantics. It integrates with:
 
 | Requirement | Relationship |
 |---|---|
-| SIM-SYS-005 | Tick lifecycle makes transport independence enforceable |
-| SIM-SYS-009 | WorldState assembled in Phase 1 with tick barrier and atomicity |
-| SIM-SYS-010 | Spawn/despawn processed in Phase 1 at tick boundary |
-| SIM-SYS-035–039 | Event evaluation in Phase 3 with snapshot semantics |
-| SIM-SYS-045 | Dump/load processed in Phase 1 at tick boundary |
-| SIM-SYS-055 | Double-buffer operates per layer-scoped bus instance |
-| SIM-SYS-056 | Tick lifecycle extends compositor runtime role |
-| SIM-SYS-057 | Relay occurs in Phase 3 |
-| SIM-SYS-058 | Fault handling covers all trait calls in all phases |
-| SIM-SYS-060 | Direct signals polled between partition steps in Phase 2 |
-| SIM-SYS-062 | This explainer |
-| SIM-SYS-063 | Bus delivery semantics declared per message type |
+| FPA-004 | Tick lifecycle makes transport independence enforceable |
+| FPA-006 | Shared state machine transitions arbitrated in Phase 3 |
+| FPA-007 | Bus delivery semantics declared per message type |
+| FPA-008 | Double-buffer operates per layer-scoped bus instance |
+| FPA-009 | Tick lifecycle extends compositor runtime role |
+| FPA-010 | Relay occurs in Phase 3 |
+| FPA-011 | Fault handling covers all trait calls in all phases |
+| FPA-012 | Recursive state contribution uses tick boundary consistency |
+| FPA-013 | Direct signals polled between partition steps in Phase 2 |
+| FPA-014 | This explainer |
+| FPA-023 | Dump/load processed in Phase 1 at tick boundary |
+| FPA-024–028 | Event evaluation in Phase 3 with snapshot semantics |
