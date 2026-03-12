@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fpa-contract",
+    "crates/fpa-bus",
+    "crates/fpa-compositor",
+    "crates/fpa-events",
+    "crates/fpa-config",
+    "crates/fpa-testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }

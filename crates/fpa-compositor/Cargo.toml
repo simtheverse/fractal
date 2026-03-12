@@ -1,0 +1,12 @@
+[package]
+name = "fpa-compositor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fpa-contract = { path = "../fpa-contract" }
+fpa-bus = { path = "../fpa-bus" }
+fpa-events = { path = "../fpa-events" }
+fpa-config = { path = "../fpa-config" }
+tokio = { workspace = true }
+toml = { workspace = true }

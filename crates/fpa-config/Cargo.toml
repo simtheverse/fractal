@@ -1,0 +1,12 @@
+[package]
+name = "fpa-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+toml = { workspace = true }
+serde = { workspace = true }
+fpa-events = { path = "../fpa-events" }
+
+[dev-dependencies]
+fpa-events = { path = "../fpa-events" }

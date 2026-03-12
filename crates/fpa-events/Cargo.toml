@@ -1,0 +1,8 @@
+[package]
+name = "fpa-events"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fpa-contract = { path = "../fpa-contract" }
+toml.workspace = true
