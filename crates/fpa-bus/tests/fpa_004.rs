@@ -3,7 +3,7 @@
 // Verifies that InProcessBus implements the Bus trait, that the Transport enum
 // has the required variants, and that the transport mode is queryable.
 
-use fpa_bus::{Bus, InProcessBus, Transport};
+use fpa_bus::{Bus, BusExt, BusReader, InProcessBus, Transport};
 use fpa_contract::{DeliverySemantic, Message};
 
 #[derive(Clone, Debug)]

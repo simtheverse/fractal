@@ -5,35 +5,18 @@
 
 use std::collections::HashMap;
 
-use fpa_bus::{Bus, InProcessBus};
-use fpa_contract::message::{DeliverySemantic, Message};
+use fpa_bus::{BusExt, InProcessBus};
 use fpa_contract::{Partition, PartitionError};
 use fpa_events::EventEngine;
+
+// Re-export SharedContext so downstream code importing from compositor::SharedContext still works.
+pub use fpa_contract::SharedContext;
 
 use crate::direct_signal::{DirectSignal, DirectSignalRegistry};
 use crate::double_buffer::DoubleBuffer;
 use crate::fault;
 use crate::multi_rate::RateConfig;
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
-
-/// Aggregated partition state published on the bus each tick.
-///
-/// This is a compositor-internal message type. It wraps a `toml::Value`
-/// containing all partition states collected during the tick, allowing
-/// any bus subscriber to observe the compositor's aggregated view.
-#[derive(Debug, Clone)]
-pub struct SharedContext {
-    /// Aggregated partition states keyed by partition ID.
-    pub state: toml::Value,
-    /// The tick number when this context was produced.
-    pub tick: u64,
-}
-
-impl Message for SharedContext {
-    const NAME: &'static str = "SharedContext";
-    const VERSION: u32 = 1;
-    const DELIVERY: DeliverySemantic = DeliverySemantic::LatestValue;
-}
 
 /// Relay policy controlling how inner transition requests are forwarded
 /// to the outer layer (FPA-010).

@@ -4,7 +4,7 @@
 // are not visible on another. Each compositor owns its own bus instance, and
 // sub-partitions communicate only within their layer's bus.
 
-use fpa_bus::{Bus, InProcessBus};
+use fpa_bus::{Bus, BusExt, BusReader, InProcessBus};
 use fpa_contract::{DeliverySemantic, Message};
 
 #[derive(Clone, Debug, PartialEq)]

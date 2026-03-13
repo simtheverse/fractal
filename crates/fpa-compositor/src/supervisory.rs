@@ -9,10 +9,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fpa_bus::{Bus, InProcessBus};
-use fpa_contract::{Partition, PartitionError};
-
-use crate::compositor::SharedContext;
+use fpa_bus::{BusExt, InProcessBus};
+use fpa_contract::{Partition, PartitionError, SharedContext};
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 
 /// An entry in the output store with freshness tracking.

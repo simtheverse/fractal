@@ -4,7 +4,7 @@
 // delivery semantics. Each test scenario is defined as a generic function and
 // invoked with both bus implementations.
 
-use fpa_bus::{AsyncBus, Bus, InProcessBus, NetworkBus, Transport};
+use fpa_bus::{AsyncBus, Bus, BusExt, BusReader, InProcessBus, NetworkBus, Transport};
 use fpa_contract::{DeliverySemantic, Message};
 
 // --- Test message types ----------------------------------------------------

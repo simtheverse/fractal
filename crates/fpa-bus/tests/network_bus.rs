@@ -5,7 +5,7 @@
 // layers. Also demonstrates a serde round-trip to prove that message types
 // with Serialize/Deserialize can survive network-style serialization.
 
-use fpa_bus::{AsyncBus, Bus, InProcessBus, NetworkBus, Transport};
+use fpa_bus::{AsyncBus, Bus, BusExt, BusReader, InProcessBus, NetworkBus, Transport};
 use fpa_contract::{DeliverySemantic, Message};
 use serde::{Deserialize, Serialize};
 

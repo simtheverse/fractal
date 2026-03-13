@@ -211,23 +211,30 @@ of truth for interface evolution and versioning.
 **Statement:** The system shall support at minimum three inter-partition communication
 modes: (a) in-process synchronous channels, (b) asynchronous message-passing across
 threads or processes, and (c) network-based publish-subscribe over a configurable
-endpoint. The active mode shall be selectable at runtime via configuration without
-recompilation. Partitions connected by a bus instance are not required to share a process,
-thread, or physical machine — the bus abstraction shall support partitions executing in
-separate processes, on separate cores, or on separate compute nodes. Consistent with the
-fractal partition pattern (FPA-001), each compositor at every layer owns a bus instance
-for its partitions (see FPA-008). Bus instances at different layers are independent and
-may use different transport modes — the layer 0 bus might use network transport while a
-layer 1 bus uses in-process transport. The transport independence guarantee (identical
-results across modes) applies per bus instance.
+endpoint. The Bus trait shall be object-safe via a typed extension pattern (object-safe
+core with typed blanket-impl extension), allowing runtime transport selection without
+recompilation. Transport selection is a compositor configuration choice, not a partition
+concern — the typed extension pattern preserves compile-time type safety at the partition
+API while supporting `dyn Bus` for runtime transport selection. Partitions connected by
+a bus instance are not required to share a process, thread, or physical machine — the
+bus abstraction shall support partitions executing in separate processes, on separate
+cores, or on separate compute nodes. Consistent with the fractal partition pattern
+(FPA-001), each compositor at every layer owns a bus instance for its partitions (see
+FPA-008). Bus instances at different layers are independent and may use different
+transport modes — the layer 0 bus might use network transport while a layer 1 bus uses
+in-process transport. The transport independence guarantee (identical results across
+modes) applies per bus instance.
 
 **Rationale:** In-process channels minimize latency for single-machine development.
 Asynchronous channels support partitions running on separate threads, in separate
 processes, or on separate cores at independent update rates. Network-based transport
 enables distributed execution across machines and integration with external tools. No
-single mode satisfies all deployment contexts. Layer-scoped bus instances allow transport
-mode to be selected independently at each layer, matching the deployment needs of each
-compositor's partitions without imposing a system-wide choice.
+single mode satisfies all deployment contexts. The typed extension pattern — an
+object-safe core trait with typed methods provided via blanket-impl extension traits —
+allows partitions to interact with the bus through compile-time-checked typed APIs while
+the compositor selects the concrete transport at runtime via `dyn Bus`. Layer-scoped bus
+instances allow transport mode to be selected independently at each layer, matching the
+deployment needs of each compositor's partitions without imposing a system-wide choice.
 
 **Verification Expectations:**
 - Pass: The same configuration executes to completion under all three transport modes with
@@ -277,7 +284,10 @@ shall observe the current state as a read-only value published through the contr
 crate. State transitions shall be requested via the bus, never by direct
 mutation of the authoritative value. The owner shall evaluate requests against the state
 machine's transition rules and reject invalid transitions. Consistent with the fractal
-partition pattern (FPA-001), this mechanism shall be identical at every layer.
+partition pattern (FPA-001), this mechanism shall be identical at every layer. The state
+machine vocabulary (the set of states and transition rules) is defined by the contract
+crate for each layer, not by this specification. FPA-006 defines the pattern — single
+owner, bus-mediated requests, transition rule enforcement — not the specific states.
 
 **Rationale:** Partitions at the same layer frequently need to coordinate around shared
 state machines — execution lifecycle, mission phase, mode selections — without coupling
@@ -317,6 +327,9 @@ are defined:
   message type. A consumer that reads slower than the producer publishes will see
   only the most recent value, not intermediate values. Suitable for continuous state
   (e.g., partition output messages that represent a continuously updated snapshot).
+  A subscriber created after a value has been published shall not observe that value;
+  retention applies only to messages published after subscription. The bus does not
+  replay historical messages to late subscribers.
 - **Queued:** The bus retains all published instances in order. A consumer receives
   every instance regardless of rate mismatch. Suitable for requests and commands
   where dropping an instance is a correctness failure (e.g., execution state
@@ -418,6 +431,22 @@ The freshness representation is defined in the contract crate alongside the outp
 The core architecture does not mandate a particular synchronization model; the tick
 lifecycle convention (FPA-014 in FPA-CON-000) is one available strategy that provides
 deterministic reproducibility.
+
+SharedContext is a framework-level message type defined in the contract crate, not an
+internal compositor type. It is published on the layer's bus like any other typed message.
+
+The Partition trait provides the following lifecycle guarantees: `init()` shall be called
+before any `step()`; `step(dt)` shall be called with `dt` equal to the elapsed time since
+the previous step invocation; `shutdown()` shall be called after all steps complete;
+`load_state()` shall only be called when no `step()` is in flight.
+
+The execution strategy (lock-step, multi-rate, supervisory) is a compositor concern and
+is runtime-configurable. The Partition trait is strategy-neutral — it defines the
+lifecycle contract without prescribing how the compositor schedules invocations.
+
+For multi-rate execution, "shared context updated at each sub-step" means the partition's
+write-buffer slot is overwritten with the latest sub-step result, not that a bus
+publication occurs per sub-step. SharedContext is published once per outer tick.
 
 **Rationale:** The compositor's assembly-time role
 (selecting and instantiating partition implementations) is complemented by runtime
@@ -555,6 +584,24 @@ fallback are recorded in the compositor's diagnostic log. If no fallback is conf
 the compositor shall always propagate the error (option 1). There shall be no
 fault-specific bus channel or message type; the compositor's error return from its own
 trait call is the propagation mechanism when errors are propagated.
+
+The compositor shall invoke all sub-partition lifecycle methods through fault-handling
+wrappers that catch panics, enforce per-invocation deadlines, and enrich errors with
+compositor context. No compositor code path shall call a sub-partition lifecycle method
+without these protections.
+
+When a sub-partition fault is propagated to the outer layer, the compositor shall
+transition its execution state to Error before returning, preventing further lifecycle
+invocations in an inconsistent state. When a fallback is activated, the compositor
+remains in its current execution state.
+
+The error returned by the compositor includes context identifying the faulting
+sub-partition's identity, layer depth, and the operation that faulted — both in logged
+output and in the error value returned to the outer layer.
+
+A fallback implementation configured for a sub-partition shall have the same partition
+identity (`id()`) as the primary partition it replaces. The compositor shall reject
+registration of a fallback whose identity does not match the target partition.
 
 **Rationale:** A sub-partition fault means the system's state may be invalid.
 Silently continuing without a failed sub-component produces incorrect results;
@@ -908,8 +955,13 @@ as a composition fragment (FPA-022). A load operation shall accept a state snaps
 composition fragment and restore the system to the captured state, replacing the
 current state of all partitions and entities. Dump shall be invocable while the system
 is actively processing or while processing is idle. Load shall be invocable only while
-processing is idle; loading while partitions are actively stepping shall not be
-supported. When the system is actively processing, the implementation shall ensure
+processing is idle — specifically, when no partition lifecycle methods are in flight AND
+the execution state machine is in a non-processing state (e.g., Paused or
+Uninitialized). For lock-step compositors, this is inherently satisfied since `load()`
+and `step()` cannot execute concurrently. For supervisory compositors, the compositor
+must pause partition tasks before loading state. Loading while partitions are actively
+stepping shall not be supported. When the system is actively processing, the
+implementation shall ensure
 temporal consistency — all partition contributions shall correspond to the same completed
 processing cycle. When the tick lifecycle convention (FPA-014) is adopted, this is
 achieved by processing dump at a tick boundary in Phase 1. Both operations shall be
@@ -998,7 +1050,13 @@ vocabulary is the layer-scoped semantic content.
 Consistent with the fractal partition pattern (FPA-001), time semantics vary by
 layer: at layer 0 (system level), time-triggered events shall reference wall-clock time
 elapsed since system start; at layer 1 (partition level), time-triggered events shall
-reference logical time as defined by the system clock.
+reference logical time as defined by the system clock. Logical time shall be tracked as
+the cumulative sum of `dt` values passed to the compositor's step invocations, not
+derived from tick count multiplied by the current `dt`.
+
+The event engine is time-semantic-agnostic. The compositor at each layer passes the
+appropriate time basis to the event engine: wall-clock elapsed time at layer 0, or
+logical/simulation time at deeper layers.
 
 **Rationale:** Wall-clock triggers at layer 0 support infrastructure concerns such as
 output snapshots, periodic health checks, and real-time synchronization boundaries
@@ -1025,7 +1083,9 @@ evaluated against observable signals. A condition shall be expressible as a bool
 predicate over one or more named signals (e.g., `value_a < 100.0`,
 `value_b > 1.0 && value_c > 500.0`). The set of observable signals shall include
 any value published on the bus or exposed as a named field within a
-partition's state.
+partition's state. Equality predicates (`==`) shall use exact floating-point comparison.
+Configuration authors requiring tolerance-based comparison should express this using
+compound predicates (e.g., `value > threshold - epsilon && value < threshold + epsilon`).
 
 **Rationale:** Many events are defined not by clock time but by runtime
 conditions: triggering at a threshold, changing mode when a measurement enters a

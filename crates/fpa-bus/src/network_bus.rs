@@ -2,22 +2,22 @@
 //!
 //! This is a stub that proves the Bus trait abstraction works across different
 //! transport modes. Internally it uses the same clone-based delivery as
-//! InProcessBus. A real implementation would serialize messages to bytes and
-//! send them over TCP/gRPC, requiring `Serialize + Deserialize` bounds on
-//! messages.
+//! InProcessBus. A real implementation would register per-type codecs for
+//! serialization and send messages over TCP/gRPC.
 //!
-//! TODO: Replace clone-based delivery with actual network serialization
-//! (e.g., serde + toml/bincode over TCP) once Message gains Serialize bounds.
+//! The codec registration pattern (register_codec<M>) allows network
+//! transport without adding serde bounds to the base Message trait.
 
-use crate::bus::{Bus, BusReader, Transport};
-use fpa_contract::message::{DeliverySemantic, Message};
+use crate::bus::{Bus, CloneableMessage, ErasedReader, Transport};
+use fpa_contract::message::DeliverySemantic;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 /// Channel state for a single message type.
 struct ChannelState {
-    subscribers: Vec<Arc<Mutex<SubscriberState>>>,
+    /// Active subscribers: Weak refs enable automatic cleanup when readers drop.
+    subscribers: Vec<Weak<Mutex<SubscriberState>>>,
 }
 
 struct SubscriberState {
@@ -41,8 +41,11 @@ impl NetworkBus {
         }
     }
 
-    fn ensure_channel<M: Message>(channels: &mut HashMap<TypeId, ChannelState>) {
-        let type_id = TypeId::of::<M>();
+    fn ensure_channel(
+        channels: &mut HashMap<TypeId, ChannelState>,
+        type_id: TypeId,
+        _semantic: DeliverySemantic,
+    ) {
         channels.entry(type_id).or_insert_with(|| ChannelState {
             subscribers: Vec::new(),
         });
@@ -50,46 +53,55 @@ impl NetworkBus {
 }
 
 impl Bus for NetworkBus {
-    fn publish<M: Message>(&self, msg: M) {
+    fn publish_erased(
+        &self,
+        type_id: TypeId,
+        semantic: DeliverySemantic,
+        msg: Box<dyn CloneableMessage>,
+    ) {
         let mut channels = self.channels.lock().unwrap();
-        Self::ensure_channel::<M>(&mut channels);
+        Self::ensure_channel(&mut channels, type_id, semantic);
 
-        let type_id = TypeId::of::<M>();
         let channel = channels.get_mut(&type_id).unwrap();
 
-        for sub in &channel.subscribers {
-            let mut sub_state = sub.lock().unwrap();
-            match sub_state.semantic {
-                DeliverySemantic::LatestValue => {
-                    sub_state.latest = Some(Box::new(msg.clone()));
-                }
-                DeliverySemantic::Queued => {
-                    sub_state.queue.push_back(Box::new(msg.clone()));
+        // Prune dead subscribers
+        channel.subscribers.retain(|w| w.strong_count() > 0);
+
+        for weak_sub in &channel.subscribers {
+            if let Some(sub) = weak_sub.upgrade() {
+                let mut sub_state = sub.lock().unwrap();
+                let cloned: Box<dyn Any + Send> = msg.clone_box().into_any();
+                match sub_state.semantic {
+                    DeliverySemantic::LatestValue => {
+                        sub_state.latest = Some(cloned);
+                    }
+                    DeliverySemantic::Queued => {
+                        sub_state.queue.push_back(cloned);
+                    }
                 }
             }
         }
-
     }
 
-    fn subscribe<M: Message>(&self) -> Box<dyn BusReader<M>> {
+    fn subscribe_erased(
+        &self,
+        type_id: TypeId,
+        semantic: DeliverySemantic,
+    ) -> Box<dyn ErasedReader> {
         let mut channels = self.channels.lock().unwrap();
-        Self::ensure_channel::<M>(&mut channels);
+        Self::ensure_channel(&mut channels, type_id, semantic);
 
-        let type_id = TypeId::of::<M>();
         let channel = channels.get_mut(&type_id).unwrap();
 
         let sub_state = Arc::new(Mutex::new(SubscriberState {
             latest: None,
             queue: VecDeque::new(),
-            semantic: M::DELIVERY,
+            semantic,
         }));
 
-        channel.subscribers.push(sub_state.clone());
+        channel.subscribers.push(Arc::downgrade(&sub_state));
 
-        Box::new(NetworkReader::<M> {
-            state: sub_state,
-            _marker: std::marker::PhantomData,
-        })
+        Box::new(NetworkReader { state: sub_state })
     }
 
     fn transport(&self) -> Transport {
@@ -101,42 +113,24 @@ impl Bus for NetworkBus {
     }
 }
 
-struct NetworkReader<M> {
+struct NetworkReader {
     state: Arc<Mutex<SubscriberState>>,
-    _marker: std::marker::PhantomData<M>,
 }
 
-impl<M: Message> BusReader<M> for NetworkReader<M> {
-    fn read(&mut self) -> Option<M> {
+impl ErasedReader for NetworkReader {
+    fn read_erased(&mut self) -> Option<Box<dyn Any + Send>> {
         let mut state = self.state.lock().unwrap();
         match state.semantic {
-            DeliverySemantic::LatestValue => {
-                state.latest.take().and_then(|v| v.downcast::<M>().ok()).map(|v| *v)
-            }
-            DeliverySemantic::Queued => {
-                if state.queue.is_empty() {
-                    None
-                } else {
-                    state.queue.pop_front().and_then(|v| v.downcast::<M>().ok()).map(|v| *v)
-                }
-            }
+            DeliverySemantic::LatestValue => state.latest.take(),
+            DeliverySemantic::Queued => state.queue.pop_front(),
         }
     }
 
-    fn read_all(&mut self) -> Vec<M> {
+    fn read_all_erased(&mut self) -> Vec<Box<dyn Any + Send>> {
         let mut state = self.state.lock().unwrap();
         match state.semantic {
-            DeliverySemantic::LatestValue => {
-                state.latest.take()
-                    .and_then(|v| v.downcast::<M>().ok())
-                    .map(|v| vec![*v])
-                    .unwrap_or_default()
-            }
-            DeliverySemantic::Queued => {
-                state.queue.drain(..)
-                    .filter_map(|v| v.downcast::<M>().ok().map(|v| *v))
-                    .collect()
-            }
+            DeliverySemantic::LatestValue => state.latest.take().into_iter().collect(),
+            DeliverySemantic::Queued => state.queue.drain(..).collect(),
         }
     }
 }

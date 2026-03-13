@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fpa_bus::{Bus, InProcessBus};
+use fpa_bus::{BusExt, BusReader, InProcessBus};
 use fpa_compositor::compositor::SharedContext;
 use fpa_compositor::supervisory::{FreshnessEntry, SupervisoryCompositor};
 use fpa_contract::test_support::Counter;

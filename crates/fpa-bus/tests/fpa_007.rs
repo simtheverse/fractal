@@ -5,7 +5,7 @@
 // - Queued: all messages are retained in order.
 // Also verifies that delivery semantic is declared per message type in the contract.
 
-use fpa_bus::{Bus, InProcessBus};
+use fpa_bus::{BusExt, BusReader, InProcessBus};
 use fpa_contract::{DeliverySemantic, Message};
 
 // --- Test message types ----------------------------------------------------

@@ -3,7 +3,7 @@
 //! Each compositor owns its own bus. When a compositor is nested inside another,
 //! the inner bus is distinct from the outer bus.
 
-use fpa_bus::{Bus, InProcessBus};
+use fpa_bus::{Bus, BusExt, BusReader, InProcessBus};
 use fpa_compositor::compositor::{Compositor, SharedContext};
 use fpa_contract::test_support::Counter;
 
