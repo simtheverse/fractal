@@ -1,8 +1,8 @@
 //! Async bus implementation using tokio channels.
 //!
-//! Uses `tokio::sync::mpsc::unbounded_channel` for message delivery.
-//! For LatestValue, the reader drains the channel and returns only the last value.
-//! For Queued, messages are delivered in order.
+//! For LatestValue, each subscriber has a shared slot (`Arc<Mutex<Option>>`)
+//! that the publisher overwrites in place — no unbounded queue growth.
+//! For Queued, messages are delivered via `tokio::sync::mpsc::unbounded_channel`.
 //!
 //! The external API remains synchronous (FPA-004); internally, the tokio
 //! unbounded channel's `send()` and `try_recv()` are both non-async.
@@ -11,13 +11,18 @@ use crate::bus::{Bus, CloneableMessage, ErasedReader, Transport};
 use fpa_contract::message::DeliverySemantic;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc;
 
-/// Holds the per-message-type sender list (type-erased).
+/// A subscriber entry, either a shared slot (LatestValue) or a channel sender (Queued).
+enum Subscriber {
+    LatestValue(Weak<Mutex<Option<Box<dyn Any + Send>>>>),
+    Queued(mpsc::UnboundedSender<Box<dyn Any + Send>>),
+}
+
+/// Holds the per-message-type subscriber list (type-erased).
 struct ChannelState {
-    /// Senders for all subscribers. Dead senders are pruned during publish.
-    senders: Vec<mpsc::UnboundedSender<Box<dyn Any + Send>>>,
+    subscribers: Vec<Subscriber>,
 }
 
 /// Async bus using tokio channels. Supports both delivery semantics (FPA-007).
@@ -37,10 +42,9 @@ impl AsyncBus {
     fn ensure_channel(
         channels: &mut HashMap<TypeId, ChannelState>,
         type_id: TypeId,
-        _semantic: DeliverySemantic,
     ) {
         channels.entry(type_id).or_insert_with(|| ChannelState {
-            senders: Vec::new(),
+            subscribers: Vec::new(),
         });
     }
 }
@@ -49,21 +53,34 @@ impl Bus for AsyncBus {
     fn publish_erased(
         &self,
         type_id: TypeId,
-        semantic: DeliverySemantic,
+        _semantic: DeliverySemantic,
         msg: Box<dyn CloneableMessage>,
     ) {
         let mut channels = self.channels.lock().unwrap();
-        Self::ensure_channel(&mut channels, type_id, semantic);
+        Self::ensure_channel(&mut channels, type_id);
 
         let channel = channels.get_mut(&type_id).unwrap();
 
-        // Prune closed senders (subscriber dropped their receiver)
-        channel.senders.retain(|tx| !tx.is_closed());
+        // Prune dead subscribers
+        channel.subscribers.retain(|sub| match sub {
+            Subscriber::LatestValue(weak) => weak.strong_count() > 0,
+            Subscriber::Queued(tx) => !tx.is_closed(),
+        });
 
-        // Send a clone to each subscriber
-        for tx in &channel.senders {
-            let cloned: Box<dyn Any + Send> = msg.clone_box().into_any();
-            let _ = tx.send(cloned);
+        // Deliver to each subscriber
+        for sub in &channel.subscribers {
+            match sub {
+                Subscriber::LatestValue(weak) => {
+                    if let Some(slot) = weak.upgrade() {
+                        let cloned: Box<dyn Any + Send> = msg.clone_box().into_any();
+                        *slot.lock().unwrap() = Some(cloned);
+                    }
+                }
+                Subscriber::Queued(tx) => {
+                    let cloned: Box<dyn Any + Send> = msg.clone_box().into_any();
+                    let _ = tx.send(cloned);
+                }
+            }
         }
     }
 
@@ -73,14 +90,22 @@ impl Bus for AsyncBus {
         semantic: DeliverySemantic,
     ) -> Box<dyn ErasedReader> {
         let mut channels = self.channels.lock().unwrap();
-        Self::ensure_channel(&mut channels, type_id, semantic);
+        Self::ensure_channel(&mut channels, type_id);
 
         let channel = channels.get_mut(&type_id).unwrap();
 
-        let (tx, rx) = mpsc::unbounded_channel();
-        channel.senders.push(tx);
-
-        Box::new(AsyncReader { rx, semantic })
+        match semantic {
+            DeliverySemantic::LatestValue => {
+                let slot = Arc::new(Mutex::new(None));
+                channel.subscribers.push(Subscriber::LatestValue(Arc::downgrade(&slot)));
+                Box::new(LatestValueReader { slot })
+            }
+            DeliverySemantic::Queued => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                channel.subscribers.push(Subscriber::Queued(tx));
+                Box::new(QueuedReader { rx })
+            }
+        }
     }
 
     fn transport(&self) -> Transport {
@@ -92,44 +117,36 @@ impl Bus for AsyncBus {
     }
 }
 
-/// Reader for both delivery semantics using tokio::sync::mpsc.
-struct AsyncReader {
-    rx: mpsc::UnboundedReceiver<Box<dyn Any + Send>>,
-    semantic: DeliverySemantic,
+/// Reader for LatestValue: single shared slot, overwritten on each publish.
+struct LatestValueReader {
+    slot: Arc<Mutex<Option<Box<dyn Any + Send>>>>,
 }
 
-impl ErasedReader for AsyncReader {
+impl ErasedReader for LatestValueReader {
     fn read_erased(&mut self) -> Option<Box<dyn Any + Send>> {
-        match self.semantic {
-            DeliverySemantic::LatestValue => {
-                // Drain channel, keep only the last value.
-                let mut latest = None;
-                while let Ok(msg) = self.rx.try_recv() {
-                    latest = Some(msg);
-                }
-                latest
-            }
-            DeliverySemantic::Queued => self.rx.try_recv().ok(),
-        }
+        self.slot.lock().unwrap().take()
     }
 
     fn read_all_erased(&mut self) -> Vec<Box<dyn Any + Send>> {
-        match self.semantic {
-            DeliverySemantic::LatestValue => {
-                // Drain channel, return only the last value.
-                let mut latest = None;
-                while let Ok(msg) = self.rx.try_recv() {
-                    latest = Some(msg);
-                }
-                latest.into_iter().collect()
-            }
-            DeliverySemantic::Queued => {
-                let mut results = Vec::new();
-                while let Ok(msg) = self.rx.try_recv() {
-                    results.push(msg);
-                }
-                results
-            }
+        self.slot.lock().unwrap().take().into_iter().collect()
+    }
+}
+
+/// Reader for Queued: messages delivered in order via channel.
+struct QueuedReader {
+    rx: mpsc::UnboundedReceiver<Box<dyn Any + Send>>,
+}
+
+impl ErasedReader for QueuedReader {
+    fn read_erased(&mut self) -> Option<Box<dyn Any + Send>> {
+        self.rx.try_recv().ok()
+    }
+
+    fn read_all_erased(&mut self) -> Vec<Box<dyn Any + Send>> {
+        let mut results = Vec::new();
+        while let Ok(msg) = self.rx.try_recv() {
+            results.push(msg);
         }
+        results
     }
 }

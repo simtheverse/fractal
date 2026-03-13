@@ -67,10 +67,12 @@ This is negligible compared to the work partitions do in their `step()` methods.
 
 **Latest-value slot reuse**: For LatestValue delivery, each subscriber has a
 single slot. Publishing overwrites the previous value in place (the old Box is
-dropped, the new one replaces it). There is no unbounded queue growth.
+dropped, the new one replaces it). There is no unbounded queue growth. All bus
+implementations (`InProcessBus`, `AsyncBus`, `NetworkBus`) use this pattern.
 
-**Dead subscriber cleanup**: Subscriber lists use `Weak` references. When a
-reader is dropped, its entry is automatically pruned during the next publish.
+**Dead subscriber cleanup**: `InProcessBus` and `NetworkBus` use `Weak`
+references; `AsyncBus` prunes closed senders. In all cases, when a reader is
+dropped, its subscriber entry is automatically pruned during the next publish.
 This prevents memory growth from accumulated dead subscribers.
 
 **Queued message consumption**: Queued subscribers drain their queue on read.

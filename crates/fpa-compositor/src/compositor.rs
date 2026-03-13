@@ -540,12 +540,29 @@ impl Compositor {
             "tick_count".to_string(),
             toml::Value::Integer(tick_count),
         );
+        system.insert(
+            "elapsed_time".to_string(),
+            toml::Value::Float(self.elapsed_time),
+        );
         root.insert("system".to_string(), toml::Value::Table(system));
         Ok(toml::Value::Table(root))
     }
 
     /// Load state from a TOML composition fragment (FPA-022, FPA-023).
+    ///
+    /// Load is only valid when no lifecycle calls are in flight (FPA-023 idle
+    /// precondition). In a single-threaded compositor, the transitional states
+    /// (Initializing, ShuttingDown) indicate lifecycle calls are in progress.
     pub fn load(&mut self, fragment: toml::Value) -> Result<(), PartitionError> {
+        let state = self.state_machine.state();
+        if state == ExecutionState::Initializing || state == ExecutionState::ShuttingDown {
+            return Err(self.make_error(
+                "compositor",
+                "load",
+                format!("load is not valid while compositor is in {} state (lifecycle calls in flight)", state),
+            ));
+        }
+
         // Extract partitions section
         if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
             for partition in &mut self.partitions {
@@ -562,6 +579,9 @@ impl Compositor {
                 self.tick_count = u64::try_from(tc).map_err(|_| {
                     self.make_error("compositor", "load", "tick_count is negative".to_string())
                 })?;
+            }
+            if let Some(et) = system.get("elapsed_time").and_then(|v| v.as_float()) {
+                self.elapsed_time = et;
             }
         }
         Ok(())
