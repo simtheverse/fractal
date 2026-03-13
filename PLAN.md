@@ -36,10 +36,14 @@ that a spec requirement is ambiguous, contradictory, or impractical:
 1. Record the finding in `docs/feedback/FPA-NNN.md` (requirement ID, issue,
    proposed resolution)
 2. Continue implementation using the best available interpretation
-3. Phase 6 synthesis incorporates all recorded feedback
+3. Address feedback as it accumulates — do not defer to a later phase
 
 Do not defer implementation waiting for spec clarification — the prototype's
 purpose is to surface these issues.
+
+**Note:** A systematic feedback review was conducted after Phase 3, addressing
+11 feedback items. Spec edits, bus redesign, SharedContext relocation, and
+subscriber lifecycle fixes were applied. See Phase 3b below.
 
 ---
 
@@ -97,8 +101,10 @@ purpose is to surface these issues.
   - `fpa_007.rs`: Latest-value retains only most recent; queued retains all in order; delivery semantic declared per message type
   - `fpa_008.rs`: Layer-scoped bus instances are independent; sub-partition publishes only to its layer's bus
 - [x] **1B.2** Define `Bus` trait in `fpa-bus`:
-  - `publish<M: Message>(&self, msg: M)`
-  - `subscribe<M: Message>(&self) -> Receiver<M>`
+  - Object-safe core: `Bus` trait with `publish_erased()`, `subscribe_erased()`, `transport()`, `id()` — supports `dyn Bus` for runtime transport selection
+  - Typed extension: `BusExt` trait with `publish<M>()` and `subscribe<M>()` via blanket impl for `T: Bus + ?Sized`
+  - `CloneableMessage` trait bridging type erasure and Clone for multi-subscriber delivery
+  - `TypedReader<M>` wrapping `Box<dyn ErasedReader>` to restore compile-time types
   - `Transport` enum (`InProcess`, `Async`, `Network`)
 - [x] **1B.3** Implement `InProcessBus` — channel-based, supports both delivery semantics
 - [x] **1B.4** Test latest-value: publish 3 times, consumer reads once → gets last value
@@ -186,8 +192,8 @@ purpose is to surface these issues.
 - [x] **2D.2** Implement `Compositor` struct in `fpa-compositor`:
   - Assembly: accept list of `Box<dyn Partition>` + composition config
   - Lifecycle: `init()` → `run_tick(dt)` → `shutdown()` delegating to partitions
-  - Bus owner: creates and holds `InProcessBus` for its layer
-  - Shared context: publishes aggregated state on bus each tick
+  - Bus owner: creates and holds concrete `InProcessBus` for its layer (Phase 4 task to change to `Box<dyn Bus>` for runtime transport selection)
+  - Shared context: `SharedContext` defined in `fpa-contract` (framework type), published on bus each tick via `BusExt`
   - Request arbitration: receives typed requests, applies state machine transition rules
 - [x] **2D.3** Implement shared state machine:
   - State enum + transition rules defined in contract crate
@@ -320,7 +326,7 @@ purpose is to surface these issues.
 
 - [x] **3K.1** Write failing tests in `crates/fpa-compositor/tests/`:
   - Multi-rate: fast partition steps 4x per slow partition 1x; results correct
-  - Shared context updated at each sub-step
+  - Shared context published once per outer tick; fast partitions write to separate write-buffer slots per sub-step
 - [x] **3K.2** Implement multi-rate scheduling in compositor:
   - Rate multiplier per partition in composition fragment
   - Compositor sub-steps fast partitions within a single outer tick
@@ -344,10 +350,33 @@ purpose is to surface these issues.
 
 ---
 
+## Phase 3b — Feedback Review & Architecture Refinement
+
+> Depends on: Phase 3.
+> Systematic review of 11 feedback items collected during Phases 0–3.
+
+- [x] **3b.1** Review all feedback files in `docs/feedback/` for credibility and validity
+- [x] **3b.2** Bus redesign (FPA-004): Refactor `Bus` trait to object-safe core + `BusExt` typed extension
+  - `CloneableMessage` trait for type-erased multi-subscriber delivery
+  - `TypedReader<M>` wrapping `Box<dyn ErasedReader>` for compile-time type restoration
+  - Updated `InProcessBus`, `AsyncBus`, `NetworkBus` to implement object-safe `Bus`
+- [x] **3b.3** Subscriber lifecycle fix (FPA-004): Switch to `Weak` subscriber refs with lazy pruning during publish
+- [x] **3b.4** SharedContext relocation (FPA-009): Move `SharedContext` from `fpa-compositor` to `fpa-contract` as framework type
+- [x] **3b.5** Spec edits: Apply 8 clarifications to `SPECIFICATION.md`:
+  - FPA-004 (runtime transport), FPA-006 (domain-specific state vocabulary), FPA-007 (late-subscriber semantics)
+  - FPA-009 (partition guarantees, strategy definitions, multi-rate clarification)
+  - FPA-011 (fault-wrap obligation, Error state, layer depth, fallback identity)
+  - FPA-023 (idle precondition), FPA-025 (cumulative time, time-agnostic engine), FPA-026 (exact float equality)
+- [x] **3b.6** Explainer doc: `docs/explanation/bus-performance-and-data-paths.md` covering double-buffer vs bus data paths, type erasure costs, and mitigations
+- [x] **3b.7** Update all test files for `BusExt`/`BusReader` imports (8 test files across `fpa-bus` and `fpa-compositor`)
+- [x] **3b.8** All tests pass after refactoring; `cargo test` green
+
+---
+
 ## Phase 4 — Cross-cutting Integration
 
-> Depends on: Phase 3 Tracks K and L (for Track M); Phase 3 Track G (for Track H-validation).
-> Three parallel tracks, with dependencies noted.
+> Depends on: Phase 3b.
+> Four parallel tracks, with dependencies noted.
 
 ### Track M: Cross-strategy Composition
 
@@ -379,6 +408,17 @@ purpose is to surface these issues.
   - Verify test file naming matches requirement IDs across all crates
   - Check for orphan requirements (no parent trace)
 - [ ] **4H.2** All structure validation tests pass across the full workspace
+
+### Track M2: Runtime Transport in Compositor
+
+**Requirements covered:** FPA-004 (runtime transport selection)
+
+> Depends on: Phase 3b (bus redesign must be complete).
+
+- [ ] **4M2.1** Change `Compositor` and `SupervisoryCompositor` to accept `Box<dyn Bus>` instead of concrete `InProcessBus`
+- [ ] **4M2.2** Update compositor construction to receive bus via dependency injection
+- [ ] **4M2.3** Test: same compositor config runs with `InProcessBus`, `AsyncBus`, `NetworkBus` — identical results
+- [ ] **4M2.4** All runtime transport tests pass
 
 ### Track N: Contract Test Reusability & Reference Data
 
@@ -466,6 +506,7 @@ purpose is to surface these issues.
 - [ ] **6R.2** Measure performance:
   - Tick overhead (empty partitions): time per tick at 10, 100, 1000 partitions
   - Bus throughput: messages/sec for each transport mode
+  - Type erasure overhead: Box allocation + clone cost per publish, `dyn Bus` vs concrete bus dispatch
   - Double-buffer swap cost
   - Compositor relay overhead per layer depth
 - [ ] **6R.3** Assess fractal uniformity:
@@ -483,7 +524,7 @@ purpose is to surface these issues.
   - Which FPA claims are validated by the prototype?
   - Which claims need spec revision based on implementation experience?
   - Recommended changes to FPA-SRS-000 or FPA-CON-000
-- [ ] **7.2** Incorporate spec feedback recorded in `docs/feedback/` throughout implementation
+- [ ] **7.2** Final spec feedback pass — most feedback addressed in Phase 3b; review any remaining items from Phases 4–6
 - [ ] **7.3** List open questions and areas for further prototyping
 - [ ] **7.4** Architecture decision records for any spec changes surfaced during prototyping
 
@@ -512,7 +553,10 @@ Phase 3  ┌─ Track G (Multi-layer) ──────────────
          ├─ Track K (Multi-rate) ──────────────────► │
          └─ Track L (Supervisory) ─────────────────► │
                                                       │
+Phase 3b ── Feedback review & arch refinement ─────► ├──►
+                                                      │
 Phase 4  ┌─ Track M (Cross-strategy; needs K+L) ──► │
+         ├─ Track M2 (Box<dyn Bus> in compositor) ─► │
          ├─ Track H-validation (Full docs check) ──► ├──►
          └─ Track N (Reference data; needs 2b+) ───► │
                                                       │
@@ -525,9 +569,9 @@ Phase 6  ┌─ Track P (Replaceability eval) ─────────► │
 Phase 7  ── Synthesis ─────────────────────────────► ▪
 ```
 
-**Critical path:** 0 → 1(A,B,C) → 2(D) → 2b → 3(G) → 4(M) → 5(O) → 6 → 7
+**Critical path:** 0 → 1(A,B,C) → 2(D) → 2b → 3(G) → 3b → 4(M) → 5(O) → 6 → 7
 
-**Max concurrent tracks:** 5 (Phase 1), 5 (Phase 3)
+**Max concurrent tracks:** 5 (Phase 1), 5 (Phase 3), 4 (Phase 4)
 
 ## Requirements Traceability Matrix
 
