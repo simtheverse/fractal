@@ -8,13 +8,7 @@ use std::sync::{Arc, Mutex};
 
 /// Channel state for a single message type.
 struct ChannelState {
-    /// For LatestValue: stores the most recent value.
-    latest: Option<Box<dyn Any + Send>>,
-    /// For Queued: stores all published values in order.
-    queue: VecDeque<Box<dyn Any + Send>>,
-    /// The delivery semantic for this channel.
-    semantic: DeliverySemantic,
-    /// Subscriber notification: each subscriber gets its own copy.
+    /// Active subscribers: each subscriber gets its own copy of published messages.
     subscribers: Vec<Arc<Mutex<SubscriberState>>>,
 }
 
@@ -44,9 +38,6 @@ impl InProcessBus {
     fn ensure_channel<M: Message>(channels: &mut HashMap<TypeId, ChannelState>) {
         let type_id = TypeId::of::<M>();
         channels.entry(type_id).or_insert_with(|| ChannelState {
-            latest: None,
-            queue: VecDeque::new(),
-            semantic: M::DELIVERY,
             subscribers: Vec::new(),
         });
     }
@@ -70,16 +61,6 @@ impl Bus for InProcessBus {
                 DeliverySemantic::Queued => {
                     sub_state.queue.push_back(Box::new(msg.clone()));
                 }
-            }
-        }
-
-        // Also store in channel state
-        match channel.semantic {
-            DeliverySemantic::LatestValue => {
-                channel.latest = Some(Box::new(msg));
-            }
-            DeliverySemantic::Queued => {
-                channel.queue.push_back(Box::new(msg));
             }
         }
     }

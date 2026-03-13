@@ -2,7 +2,8 @@
 
 use fpa_contract::message::Message;
 
-/// Transport mode for the bus. Selectable at runtime without recompilation (FPA-004).
+/// Transport mode for the bus (FPA-004).
+/// See `docs/feedback/FPA-004.md` for status on runtime selectability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     /// In-process synchronous channels.

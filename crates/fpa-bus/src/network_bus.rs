@@ -17,9 +17,6 @@ use std::sync::{Arc, Mutex};
 
 /// Channel state for a single message type.
 struct ChannelState {
-    latest: Option<Box<dyn Any + Send>>,
-    queue: VecDeque<Box<dyn Any + Send>>,
-    semantic: DeliverySemantic,
     subscribers: Vec<Arc<Mutex<SubscriberState>>>,
 }
 
@@ -47,9 +44,6 @@ impl NetworkBus {
     fn ensure_channel<M: Message>(channels: &mut HashMap<TypeId, ChannelState>) {
         let type_id = TypeId::of::<M>();
         channels.entry(type_id).or_insert_with(|| ChannelState {
-            latest: None,
-            queue: VecDeque::new(),
-            semantic: M::DELIVERY,
             subscribers: Vec::new(),
         });
     }
@@ -75,14 +69,6 @@ impl Bus for NetworkBus {
             }
         }
 
-        match channel.semantic {
-            DeliverySemantic::LatestValue => {
-                channel.latest = Some(Box::new(msg));
-            }
-            DeliverySemantic::Queued => {
-                channel.queue.push_back(Box::new(msg));
-            }
-        }
     }
 
     fn subscribe<M: Message>(&self) -> Box<dyn BusReader<M>> {

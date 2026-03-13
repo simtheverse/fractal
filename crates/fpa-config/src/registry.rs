@@ -59,9 +59,13 @@ impl FragmentRegistry {
 
         let merged = deep_merge(base_value, overlay_value);
 
-        let result: CompositionFragment = merged
+        let mut result: CompositionFragment = merged
             .try_into()
             .map_err(|e: toml::de::Error| ConfigError::ParseError(e.to_string()))?;
+
+        // The extends chain is already resolved; clear any extends key that
+        // may have been introduced by the overrides merge.
+        result.extends = None;
 
         Ok(result)
     }

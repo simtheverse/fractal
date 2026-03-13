@@ -3,9 +3,11 @@ use std::any::Any;
 /// Delivery semantic for a message type, declared as part of the message's contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliverySemantic {
-    /// Bus retains only the most recent value. Suitable for continuous state.
+    /// Each subscriber receives only the most recent value published after subscription.
+    /// Suitable for continuous state.
     LatestValue,
-    /// Bus retains all published instances in order. Suitable for requests/commands.
+    /// Each subscriber receives all instances published after subscription, in order.
+    /// Suitable for requests/commands.
     Queued,
 }
 
