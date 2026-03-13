@@ -26,7 +26,7 @@ impl Predicate {
         match self {
             Predicate::LessThan(threshold) => value < *threshold,
             Predicate::GreaterThan(threshold) => value > *threshold,
-            Predicate::Equal(threshold) => (value - *threshold).abs() < f64::EPSILON,
+            Predicate::Equal(threshold) => value == *threshold,
             Predicate::And(a, b) => a.evaluate(value) && b.evaluate(value),
         }
     }

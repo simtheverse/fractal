@@ -236,8 +236,19 @@ impl Compositor {
     ///
     /// If the primary partition faults during step(), the fallback will be
     /// activated in its place and the compositor will continue without error.
+    ///
+    /// # Panics
+    /// Panics if the fallback's `id()` does not match `partition_id`.
     pub fn register_fallback(&mut self, partition_id: impl Into<String>, fallback: Box<dyn Partition>) {
-        self.fallbacks.insert(partition_id.into(), fallback);
+        let partition_id = partition_id.into();
+        assert_eq!(
+            fallback.id(),
+            partition_id,
+            "fallback id '{}' must match partition id '{}'",
+            fallback.id(),
+            partition_id
+        );
+        self.fallbacks.insert(partition_id, fallback);
     }
 
     /// Get the current execution state.
