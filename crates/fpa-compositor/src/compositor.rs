@@ -63,6 +63,8 @@ pub struct Compositor {
     /// Fallback partitions keyed by the ID of the partition they replace.
     fallbacks: HashMap<String, Box<dyn Partition>>,
     tick_count: u64,
+    /// Accumulated simulation time (sum of all dt values passed to run_tick).
+    elapsed_time: f64,
     /// Optional event engine for evaluating system-level events.
     event_engine: Option<EventEngine>,
     /// Action IDs triggered during the last tick's event evaluation.
@@ -92,6 +94,7 @@ impl Compositor {
             double_buffer: DoubleBuffer::new(),
             fallbacks: HashMap::new(),
             tick_count: 0,
+            elapsed_time: 0.0,
             event_engine: None,
             last_triggered_actions: Vec::new(),
             layer_depth: 0,
@@ -280,7 +283,7 @@ impl Compositor {
             let result = fault::safe_init(partition.as_mut());
             if let Err(e) = result.into_result() {
                 self.state_machine.force_state(ExecutionState::Error);
-                return Err(e);
+                return Err(e.with_layer_depth(self.layer_depth));
             }
         }
 
@@ -289,7 +292,7 @@ impl Compositor {
             let result = fault::safe_init(fallback.as_mut());
             if let Err(e) = result.into_result() {
                 self.state_machine.force_state(ExecutionState::Error);
-                return Err(e);
+                return Err(e.with_layer_depth(self.layer_depth));
             }
         }
 
@@ -323,6 +326,7 @@ impl Compositor {
         }
 
         self.tick_count += 1;
+        self.elapsed_time += dt;
 
         // Phase 1: swap buffers
         self.double_buffer.swap();
@@ -347,7 +351,7 @@ impl Compositor {
                         let fallback_result = fault::safe_step(fallback.as_mut(), sub_dt);
                         if let Err(fallback_err) = fallback_result.into_result() {
                             self.state_machine.force_state(ExecutionState::Error);
-                            return Err(fallback_err);
+                            return Err(fallback_err.with_layer_depth(self.layer_depth));
                         }
 
                         // Replace the partition with the fallback
@@ -358,14 +362,14 @@ impl Compositor {
                             let r = fault::safe_step(self.partitions[i].as_mut(), sub_dt);
                             if let Err(e) = r.into_result() {
                                 self.state_machine.force_state(ExecutionState::Error);
-                                return Err(e);
+                                return Err(e.with_layer_depth(self.layer_depth));
                             }
                         }
                         break;
                     }
 
                     // No fallback - propagate the error
-                    return Err(step_err);
+                    return Err(step_err.with_layer_depth(self.layer_depth));
                 }
             }
 
@@ -404,7 +408,7 @@ impl Compositor {
         self.last_triggered_actions.clear();
         if let Some(ref engine) = self.event_engine {
             let signals = self.build_signals();
-            let current_time = self.tick_count as f64 * dt;
+            let current_time = self.elapsed_time;
             let triggered = engine.evaluate(current_time, &signals);
             self.last_triggered_actions = triggered
                 .iter()
@@ -435,7 +439,7 @@ impl Compositor {
         for partition in &mut self.partitions {
             let result = fault::safe_shutdown(partition.as_mut());
             if let Err(e) = result.into_result() {
-                last_error = Some(e);
+                last_error = Some(e.with_layer_depth(self.layer_depth));
             }
         }
 
@@ -527,16 +531,19 @@ impl Compositor {
     pub fn dump(&self) -> Result<toml::Value, PartitionError> {
         let mut partitions = toml::map::Map::new();
         for partition in &self.partitions {
-            let state = partition.contribute_state()?;
+            let state = fault::safe_contribute_state(partition.as_ref())?;
             partitions.insert(partition.id().to_string(), state);
         }
         let mut root = toml::map::Map::new();
         root.insert("partitions".to_string(), toml::Value::Table(partitions));
         // Include system state
         let mut system = toml::map::Map::new();
+        let tick_count = i64::try_from(self.tick_count).map_err(|_| {
+            self.make_error("compositor", "dump", "tick_count exceeds i64::MAX".to_string())
+        })?;
         system.insert(
             "tick_count".to_string(),
-            toml::Value::Integer(self.tick_count as i64),
+            toml::Value::Integer(tick_count),
         );
         root.insert("system".to_string(), toml::Value::Table(system));
         Ok(toml::Value::Table(root))
@@ -555,7 +562,9 @@ impl Compositor {
         // Restore system state
         if let Some(system) = fragment.get("system").and_then(|v| v.as_table()) {
             if let Some(tc) = system.get("tick_count").and_then(|v| v.as_integer()) {
-                self.tick_count = tc as u64;
+                self.tick_count = u64::try_from(tc).map_err(|_| {
+                    self.make_error("compositor", "load", "tick_count is negative".to_string())
+                })?;
             }
         }
         Ok(())
