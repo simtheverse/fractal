@@ -69,6 +69,17 @@ pub fn safe_contribute_state(partition: &dyn Partition) -> Result<toml::Value, P
     }
 }
 
+/// Execute a partition's load_state() with panic catching and timeout detection.
+pub fn safe_load_state(
+    partition: &mut dyn Partition,
+    state: toml::Value,
+) -> FaultResult {
+    let id = partition.id().to_string();
+    safe_call(&id, "load_state", Some(INIT_TIMEOUT), || {
+        partition.load_state(state)
+    })
+}
+
 /// Core safe-call wrapper: catches panics and detects timeout (post-hoc).
 ///
 /// Runs the closure on the current thread. If a timeout duration is provided,

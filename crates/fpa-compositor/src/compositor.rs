@@ -379,7 +379,8 @@ impl Compositor {
                         break;
                     }
 
-                    // No fallback - propagate the error
+                    // No fallback - transition to Error and propagate
+                    self.state_machine.force_state(ExecutionState::Error);
                     return Err(step_err.with_layer_depth(self.layer_depth));
                 }
             }
@@ -566,7 +567,9 @@ impl Compositor {
         if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
             for partition in &mut self.partitions {
                 if let Some(state) = partitions.get(partition.id()) {
-                    partition.load_state(state.clone())?;
+                    fault::safe_load_state(partition.as_mut(), state.clone())
+                        .into_result()
+                        .map_err(|e| e.with_layer_depth(self.layer_depth))?;
                 }
             }
         }
