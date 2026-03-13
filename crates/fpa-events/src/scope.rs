@@ -35,7 +35,9 @@ impl ActionRegistry {
             .ok_or_else(|| format!("action '{}' not registered", action_id))?;
 
         if usage_scope == declaring_scope
-            || usage_scope.starts_with(&format!("{}.", declaring_scope))
+            || (usage_scope.len() > declaring_scope.len()
+                && usage_scope.starts_with(declaring_scope.as_str())
+                && usage_scope.as_bytes()[declaring_scope.len()] == b'.')
         {
             Ok(())
         } else {
