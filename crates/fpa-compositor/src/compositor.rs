@@ -369,7 +369,8 @@ impl Compositor {
             }
 
             // Collect output after all sub-steps (including fallback's remaining steps)
-            let state = fault::safe_contribute_state(self.partitions[i].as_ref())?;
+            let state = fault::safe_contribute_state(self.partitions[i].as_ref())
+                .map_err(|e| e.with_layer_depth(self.layer_depth))?;
             self.double_buffer.write(&partition_id, state);
 
             i += 1;
@@ -526,7 +527,8 @@ impl Compositor {
     pub fn dump(&self) -> Result<toml::Value, PartitionError> {
         let mut partitions = toml::map::Map::new();
         for partition in &self.partitions {
-            let state = fault::safe_contribute_state(partition.as_ref())?;
+            let state = fault::safe_contribute_state(partition.as_ref())
+                .map_err(|e| e.with_layer_depth(self.layer_depth))?;
             partitions.insert(partition.id().to_string(), state);
         }
         let mut root = toml::map::Map::new();
