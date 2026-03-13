@@ -112,11 +112,7 @@ where
 
     match result {
         Ok(Ok(())) => FaultResult::Ok,
-        Ok(Err(e)) => FaultResult::Error(PartitionError::new(
-            partition_id,
-            operation,
-            format!("partition error: {}", e.message),
-        )),
+        Ok(Err(e)) => FaultResult::Error(e),
         Err(panic_info) => FaultResult::Panic(make_panic_error(partition_id, operation, panic_info)),
     }
 }

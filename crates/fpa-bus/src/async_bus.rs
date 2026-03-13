@@ -139,6 +139,3 @@ impl<M: Message> BusReader<M> for AsyncReader<M> {
         }
     }
 }
-
-// AsyncBus needs to be Send since Bus: Send
-unsafe impl Send for AsyncBus {}

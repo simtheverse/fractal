@@ -12,20 +12,20 @@
 use crate::bus::{Bus, BusReader, Transport};
 use fpa_contract::message::{DeliverySemantic, Message};
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 /// Channel state for a single message type.
 struct ChannelState {
     latest: Option<Box<dyn Any + Send>>,
-    queue: Vec<Box<dyn Any + Send>>,
+    queue: VecDeque<Box<dyn Any + Send>>,
     semantic: DeliverySemantic,
     subscribers: Vec<Arc<Mutex<SubscriberState>>>,
 }
 
 struct SubscriberState {
     latest: Option<Box<dyn Any + Send>>,
-    queue: Vec<Box<dyn Any + Send>>,
+    queue: VecDeque<Box<dyn Any + Send>>,
     semantic: DeliverySemantic,
 }
 
@@ -48,7 +48,7 @@ impl NetworkBus {
         let type_id = TypeId::of::<M>();
         channels.entry(type_id).or_insert_with(|| ChannelState {
             latest: None,
-            queue: Vec::new(),
+            queue: VecDeque::new(),
             semantic: M::DELIVERY,
             subscribers: Vec::new(),
         });
@@ -70,7 +70,7 @@ impl Bus for NetworkBus {
                     sub_state.latest = Some(Box::new(msg.clone()));
                 }
                 DeliverySemantic::Queued => {
-                    sub_state.queue.push(Box::new(msg.clone()));
+                    sub_state.queue.push_back(Box::new(msg.clone()));
                 }
             }
         }
@@ -80,7 +80,7 @@ impl Bus for NetworkBus {
                 channel.latest = Some(Box::new(msg));
             }
             DeliverySemantic::Queued => {
-                channel.queue.push(Box::new(msg));
+                channel.queue.push_back(Box::new(msg));
             }
         }
     }
@@ -94,7 +94,7 @@ impl Bus for NetworkBus {
 
         let sub_state = Arc::new(Mutex::new(SubscriberState {
             latest: None,
-            queue: Vec::new(),
+            queue: VecDeque::new(),
             semantic: M::DELIVERY,
         }));
 
@@ -131,7 +131,7 @@ impl<M: Message> BusReader<M> for NetworkReader<M> {
                 if state.queue.is_empty() {
                     None
                 } else {
-                    state.queue.remove(0).downcast::<M>().ok().map(|v| *v)
+                    state.queue.pop_front().and_then(|v| v.downcast::<M>().ok()).map(|v| *v)
                 }
             }
         }
@@ -154,6 +154,3 @@ impl<M: Message> BusReader<M> for NetworkReader<M> {
         }
     }
 }
-
-// NetworkBus needs to be Send since Bus: Send
-unsafe impl Send for NetworkBus {}

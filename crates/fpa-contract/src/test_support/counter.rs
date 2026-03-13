@@ -48,15 +48,20 @@ impl Partition for Counter {
     }
 
     fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+        let count = i64::try_from(self.count).map_err(|_| {
+            PartitionError::new(&self.id, "contribute_state", "count exceeds i64::MAX")
+        })?;
         let mut table = toml::map::Map::new();
-        table.insert("count".to_string(), toml::Value::Integer(self.count as i64));
+        table.insert("count".to_string(), toml::Value::Integer(count));
         Ok(toml::Value::Table(table))
     }
 
     fn load_state(&mut self, state: toml::Value) -> Result<(), PartitionError> {
         if let Some(table) = state.as_table() {
             if let Some(count) = table.get("count").and_then(|v| v.as_integer()) {
-                self.count = count as u64;
+                self.count = u64::try_from(count).map_err(|_| {
+                    PartitionError::new(&self.id, "load_state", "count is negative")
+                })?;
                 return Ok(());
             }
         }
