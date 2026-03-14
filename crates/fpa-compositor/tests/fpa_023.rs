@@ -57,7 +57,9 @@ fn load_restores_state_via_load_state() {
     let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
+    compositor.pause().unwrap();
     compositor.load(state).unwrap();
+    compositor.resume().unwrap();
 
     assert_eq!(compositor.tick_count(), 10);
 
@@ -95,7 +97,9 @@ fn round_trip_identity() {
     let mut comp2 = Compositor::new(partitions2, Box::new(bus2));
 
     comp2.init().unwrap();
+    comp2.pause().unwrap();
     comp2.load(snapshot.clone()).unwrap();
+    comp2.resume().unwrap();
 
     let snapshot2 = comp2.dump().unwrap();
 
@@ -104,15 +108,13 @@ fn round_trip_identity() {
     assert_eq!(comp2.tick_count(), 5);
 }
 
-/// Load succeeds after init (Running state).
+/// Load is rejected while compositor is in Running state (FPA-023).
 ///
-/// NOTE: FPA-023 specifies "Load shall be invocable only while processing is idle;
-/// loading while partitions are actively stepping shall not be supported." The current
-/// prototype does not enforce the idle-only constraint — `load()` succeeds in any state,
-/// including Running. This test documents the current behavior. A production implementation
-/// should reject load while partitions are actively stepping.
+/// FPA-023: "Load shall be invocable only while processing is idle — specifically,
+/// when no partition lifecycle methods are in flight AND the execution state machine
+/// is in a non-processing state."
 #[test]
-fn load_while_running_succeeds_in_prototype() {
+fn load_while_running_is_rejected() {
     let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
         Box::new(Counter::new("counter")),
     ];
@@ -120,14 +122,10 @@ fn load_while_running_succeeds_in_prototype() {
     let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
-    // Compositor is now in Running state
     assert_eq!(compositor.state(), fpa_compositor::state_machine::ExecutionState::Running);
 
-    // Run a tick to confirm we're actively running
     compositor.run_tick(1.0).unwrap();
-    assert_eq!(compositor.tick_count(), 1);
 
-    // Load state while in Running state — succeeds in the prototype
     let state: toml::Value = toml::from_str(
         r#"
         [system]
@@ -142,9 +140,18 @@ fn load_while_running_succeeds_in_prototype() {
     )
     .unwrap();
 
-    // FPA-023 spec says this should only work while idle, but the prototype allows it
-    compositor.load(state).unwrap();
-    assert_eq!(compositor.tick_count(), 42);
+    // Load while Running must be rejected
+    let result = compositor.load(state);
+    assert!(result.is_err(), "load should be rejected while in Running state");
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("Paused"),
+        "error should mention Paused state requirement: {}",
+        err.message
+    );
+
+    // Tick count should be unchanged
+    assert_eq!(compositor.tick_count(), 1);
 }
 
 /// More rigorous round-trip: run N ticks, dump, load, run M more, compare with continuous N+M.
@@ -175,7 +182,9 @@ fn round_trip_with_continued_execution() {
     let mut comp_a2 = Compositor::new(partitions_a2, Box::new(bus_a2));
 
     comp_a2.init().unwrap();
+    comp_a2.pause().unwrap();
     comp_a2.load(snapshot).unwrap();
+    comp_a2.resume().unwrap();
 
     for _ in 0..m {
         comp_a2.run_tick(1.0).unwrap();

@@ -122,8 +122,11 @@ fn recursive_state_round_trip() {
     let mut outer2 = Compositor::new(outer2_partitions, Box::new(outer2_bus))
         .with_id("orchestrator");
 
-    // Load the snapshot
+    // Load the snapshot (must be in Paused state per FPA-023)
+    outer2.init().unwrap();
+    outer2.pause().unwrap();
     outer2.load(snapshot.clone()).unwrap();
+    outer2.resume().unwrap();
 
     // Verify round-trip identity
     let snapshot2 = outer2.dump().unwrap();

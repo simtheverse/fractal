@@ -254,7 +254,9 @@ fn dump_load_round_trip_with_each_transport() {
         ];
         let mut comp2 = Compositor::new(partitions2, bus2);
         comp2.init().unwrap();
+        comp2.pause().unwrap();
         comp2.load(snapshot.clone()).unwrap();
+        comp2.resume().unwrap();
 
         let snapshot2 = comp2.dump().unwrap();
         assert_eq!(snapshot, snapshot2,

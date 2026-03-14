@@ -121,6 +121,36 @@ fn no_cascade_snapshot_semantics() {
     assert_eq!(actions[0].action_id, "modify_signal");
 }
 
+/// Equality predicate uses exact floating-point comparison (FPA-026).
+///
+/// The spec requires: "Equality predicates (==) shall use exact floating-point
+/// comparison." This test verifies that a near-miss value does not trigger
+/// an equality predicate.
+#[test]
+fn equality_predicate_uses_exact_float_comparison() {
+    let engine = EventEngine::new(vec![condition_event(
+        "eq_check",
+        "value",
+        Predicate::Equal(1.0),
+    )]);
+
+    // Exact match fires
+    let mut signals = HashMap::new();
+    signals.insert("value".to_string(), 1.0);
+    let actions = engine.evaluate(0.0, &signals);
+    assert_eq!(actions.len(), 1, "exact 1.0 should fire");
+
+    // Near-miss does NOT fire (exact comparison, not approximate)
+    signals.insert("value".to_string(), 0.9999999999);
+    let actions = engine.evaluate(0.0, &signals);
+    assert!(actions.is_empty(), "0.9999999999 != 1.0 under exact comparison");
+
+    // Another near-miss
+    signals.insert("value".to_string(), 1.0000000001);
+    let actions = engine.evaluate(0.0, &signals);
+    assert!(actions.is_empty(), "1.0000000001 != 1.0 under exact comparison");
+}
+
 /// Condition predicates reference signals by name string (e.g., "altitude",
 /// "velocity"), not by memory address or index.  Two events on different
 /// named signals fire independently based on their signal's value.

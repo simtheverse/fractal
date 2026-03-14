@@ -53,16 +53,31 @@ pub fn safe_step(partition: &mut dyn Partition, dt: f64) -> FaultResult {
     safe_call(&id, "step", Some(STEP_TIMEOUT), || partition.step(dt))
 }
 
-/// Execute a partition's shutdown() with panic catching.
+/// Execute a partition's shutdown() with panic catching and timeout detection.
 pub fn safe_shutdown(partition: &mut dyn Partition) -> FaultResult {
     let id = partition.id().to_string();
-    safe_call(&id, "shutdown", None, || partition.shutdown())
+    safe_call(&id, "shutdown", Some(INIT_TIMEOUT), || partition.shutdown())
 }
 
-/// Execute a partition's contribute_state() with panic catching.
+/// Execute a partition's contribute_state() with panic catching and timeout detection.
 pub fn safe_contribute_state(partition: &dyn Partition) -> Result<toml::Value, PartitionError> {
     let id = partition.id().to_string();
+    let start = Instant::now();
     let result = panic::catch_unwind(AssertUnwindSafe(|| partition.contribute_state()));
+    let elapsed = start.elapsed();
+
+    if elapsed > STEP_TIMEOUT {
+        return Err(PartitionError::new(
+            &id,
+            "contribute_state",
+            format!(
+                "operation exceeded timeout of {}ms (took {}ms)",
+                STEP_TIMEOUT.as_millis(),
+                elapsed.as_millis()
+            ),
+        ));
+    }
+
     match result {
         Ok(inner) => inner,
         Err(panic_info) => Err(make_panic_error(&id, "contribute_state", panic_info)),

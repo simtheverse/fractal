@@ -477,6 +477,30 @@ impl Compositor {
         Ok(())
     }
 
+    /// Pause the compositor. Transitions Running -> Paused.
+    ///
+    /// Load operations require the compositor to be in Paused state (FPA-023).
+    pub fn pause(&mut self) -> Result<(), PartitionError> {
+        self.state_machine
+            .request_transition(TransitionRequest {
+                requested_by: "compositor".to_string(),
+                target_state: ExecutionState::Paused,
+            })
+            .map_err(|e| self.make_error("compositor", "pause", e.to_string()))?;
+        Ok(())
+    }
+
+    /// Resume the compositor. Transitions Paused -> Running.
+    pub fn resume(&mut self) -> Result<(), PartitionError> {
+        self.state_machine
+            .request_transition(TransitionRequest {
+                requested_by: "compositor".to_string(),
+                target_state: ExecutionState::Running,
+            })
+            .map_err(|e| self.make_error("compositor", "resume", e.to_string()))?;
+        Ok(())
+    }
+
     /// Process a transition request (e.g., received via bus).
     pub fn process_transition_request(
         &mut self,
@@ -590,22 +614,30 @@ impl Compositor {
             "elapsed_time".to_string(),
             toml::Value::Float(self.elapsed_time),
         );
+        system.insert(
+            "execution_state".to_string(),
+            toml::Value::String(self.state_machine.state().to_string()),
+        );
         root.insert("system".to_string(), toml::Value::Table(system));
         Ok(toml::Value::Table(root))
     }
 
     /// Load state from a TOML composition fragment (FPA-022, FPA-023).
     ///
-    /// Load is only valid when no lifecycle calls are in flight (FPA-023 idle
-    /// precondition). In a single-threaded compositor, the transitional states
-    /// (Initializing, ShuttingDown) indicate lifecycle calls are in progress.
+    /// Load is only valid when processing is idle (FPA-023): no partition
+    /// lifecycle methods are in flight AND the execution state machine is in a
+    /// non-processing state.  For the lock-step compositor the only valid
+    /// non-processing state is Paused.
     pub fn load(&mut self, fragment: toml::Value) -> Result<(), PartitionError> {
         let state = self.state_machine.state();
-        if state == ExecutionState::Initializing || state == ExecutionState::ShuttingDown {
+        if state != ExecutionState::Paused {
             return Err(self.make_error(
                 "compositor",
                 "load",
-                format!("load is not valid while compositor is in {} state (lifecycle calls in flight)", state),
+                format!(
+                    "load requires Paused state (FPA-023), but compositor is in {} state",
+                    state
+                ),
             ));
         }
 
@@ -666,7 +698,18 @@ impl Partition for Compositor {
     }
 
     fn load_state(&mut self, state: toml::Value) -> Result<(), PartitionError> {
-        self.load(state)
+        // When called as a nested partition, the outer compositor is responsible
+        // for ensuring idle state.  Automatically pause/resume so the inner
+        // compositor's load() precondition (Paused) is satisfied.
+        let was_running = self.state_machine.state() == ExecutionState::Running;
+        if was_running {
+            self.pause()?;
+        }
+        let result = self.load(state);
+        if was_running {
+            self.resume()?;
+        }
+        result
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
