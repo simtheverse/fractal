@@ -14,7 +14,7 @@ fn compositor_partition_contributes_nested_state() {
         Box::new(Counter::new("b2")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let mut inner = Compositor::new(inner_partitions, inner_bus)
+    let mut inner = Compositor::new(inner_partitions, Box::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1);
     inner.init().unwrap();
@@ -40,7 +40,7 @@ fn outer_sees_one_contribution_per_inner_compositor() {
         Box::new(Counter::new("b2")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let inner = Compositor::new(inner_partitions, inner_bus)
+    let inner = Compositor::new(inner_partitions, Box::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -50,7 +50,7 @@ fn outer_sees_one_contribution_per_inner_compositor() {
         Box::new(inner),
     ];
     let outer_bus = InProcessBus::new("outer-bus");
-    let mut outer = Compositor::new(outer_partitions, outer_bus)
+    let mut outer = Compositor::new(outer_partitions, Box::new(outer_bus))
         .with_id("orchestrator");
 
     outer.init().unwrap();
@@ -78,7 +78,7 @@ fn recursive_state_round_trip() {
         Box::new(Counter::new("b1")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let inner = Compositor::new(inner_partitions, inner_bus)
+    let inner = Compositor::new(inner_partitions, Box::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -87,7 +87,7 @@ fn recursive_state_round_trip() {
         Box::new(inner),
     ];
     let outer_bus = InProcessBus::new("outer-bus");
-    let mut outer = Compositor::new(outer_partitions, outer_bus)
+    let mut outer = Compositor::new(outer_partitions, Box::new(outer_bus))
         .with_id("orchestrator");
 
     outer.init().unwrap();
@@ -104,7 +104,7 @@ fn recursive_state_round_trip() {
         Box::new(Counter::new("b1")),
     ];
     let inner2_bus = InProcessBus::new("inner-bus-2");
-    let inner2 = Compositor::new(inner2_partitions, inner2_bus)
+    let inner2 = Compositor::new(inner2_partitions, Box::new(inner2_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -113,7 +113,7 @@ fn recursive_state_round_trip() {
         Box::new(inner2),
     ];
     let outer2_bus = InProcessBus::new("outer-bus-2");
-    let mut outer2 = Compositor::new(outer2_partitions, outer2_bus)
+    let mut outer2 = Compositor::new(outer2_partitions, Box::new(outer2_bus))
         .with_id("orchestrator");
 
     // Load the snapshot

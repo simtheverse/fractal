@@ -12,7 +12,7 @@ fn dump_produces_valid_toml() {
         Box::new(Counter::new("b")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     compositor.run_tick(1.0).unwrap();
@@ -34,7 +34,7 @@ fn dump_contains_all_partition_ids() {
         Box::new(Counter::new("gamma")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     compositor.run_tick(1.0).unwrap();
@@ -55,7 +55,7 @@ fn snapshot_has_composition_fragment_structure() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     compositor.run_tick(1.0).unwrap();
@@ -79,7 +79,7 @@ fn snapshot_with_extends_override() {
         Box::new(Counter::new("counter")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     for _ in 0..5 {
@@ -106,7 +106,7 @@ fn snapshot_with_extends_override() {
         Box::new(Counter::new("counter")),
     ];
     let bus2 = InProcessBus::new("test-bus-2");
-    let mut compositor2 = Compositor::new(partitions2, bus2);
+    let mut compositor2 = Compositor::new(partitions2, Box::new(bus2));
     compositor2.init().unwrap();
     compositor2.load(merged).unwrap();
 

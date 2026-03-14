@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use fpa_bus::{BusExt, InProcessBus};
+use fpa_bus::{Bus, BusExt, InProcessBus};
 use fpa_contract::{Partition, PartitionError};
 use fpa_events::EventEngine;
 
@@ -40,7 +40,7 @@ pub struct Compositor {
     /// Unique identifier for this compositor instance.
     id: String,
     partitions: Vec<Box<dyn Partition>>,
-    bus: InProcessBus,
+    bus: Box<dyn Bus>,
     state_machine: StateMachine,
     double_buffer: DoubleBuffer,
     /// Fallback partitions keyed by the ID of the partition they replace.
@@ -68,7 +68,11 @@ pub struct Compositor {
 
 impl Compositor {
     /// Create a new compositor with the given partitions and bus.
-    pub fn new(partitions: Vec<Box<dyn Partition>>, bus: InProcessBus) -> Self {
+    ///
+    /// Accepts any `Bus` implementation via `Box<dyn Bus>`, enabling runtime
+    /// transport selection (FPA-004). For convenience with `InProcessBus`,
+    /// use `Compositor::new_default`.
+    pub fn new(partitions: Vec<Box<dyn Partition>>, bus: Box<dyn Bus>) -> Self {
         Self {
             id: "compositor".to_string(),
             partitions,
@@ -87,6 +91,14 @@ impl Compositor {
             direct_signal_registry: DirectSignalRegistry::new(),
             emitted_signals: Vec::new(),
         }
+    }
+
+    /// Create a new compositor with a default `InProcessBus`.
+    ///
+    /// Convenience constructor for the common case where in-process transport
+    /// is sufficient.
+    pub fn new_default(partitions: Vec<Box<dyn Partition>>, bus_id: impl Into<String>) -> Self {
+        Self::new(partitions, Box::new(InProcessBus::new(bus_id)))
     }
 
     /// Set the compositor ID.
@@ -250,8 +262,8 @@ impl Compositor {
     }
 
     /// Get a reference to the bus.
-    pub fn bus(&self) -> &InProcessBus {
-        &self.bus
+    pub fn bus(&self) -> &dyn Bus {
+        &*self.bus
     }
 
     /// Get a reference to the double buffer.

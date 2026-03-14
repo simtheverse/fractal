@@ -16,7 +16,7 @@ fn make_compositor(policy: RelayPolicy) -> Compositor {
         Box::new(Counter::new("inner_b")),
     ];
     let bus = InProcessBus::new("relay-test-bus");
-    Compositor::new(partitions, bus)
+    Compositor::new(partitions, Box::new(bus))
         .with_id("inner-compositor")
         .with_layer_depth(1)
         .with_relay_policy(policy)
@@ -115,7 +115,7 @@ fn two_layer_suppress_hides_inner_requests() {
         Box::new(Counter::new("B2")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let mut inner = Compositor::new(inner_partitions, inner_bus)
+    let mut inner = Compositor::new(inner_partitions, Box::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1)
         .with_relay_policy(RelayPolicy::Suppress);
@@ -145,7 +145,7 @@ fn two_layer_forward_exposes_inner_requests() {
         Box::new(Counter::new("B2")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let mut inner = Compositor::new(inner_partitions, inner_bus)
+    let mut inner = Compositor::new(inner_partitions, Box::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1)
         .with_relay_policy(RelayPolicy::Forward);
@@ -176,7 +176,7 @@ fn two_layer_relay_via_step() {
         Box::new(Counter::new("B1")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let mut inner = Compositor::new(inner_partitions, inner_bus)
+    let mut inner = Compositor::new(inner_partitions, Box::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1)
         .with_relay_policy(RelayPolicy::Forward);
@@ -193,7 +193,7 @@ fn two_layer_relay_via_step() {
         Box::new(inner),
     ];
     let outer_bus = InProcessBus::new("outer-bus");
-    let mut outer = Compositor::new(outer_partitions, outer_bus)
+    let mut outer = Compositor::new(outer_partitions, Box::new(outer_bus))
         .with_id("orchestrator");
 
     outer.init().unwrap();

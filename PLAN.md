@@ -384,15 +384,15 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 
 > Depends on: Tracks K and L (needs both multi-rate and supervisory to compose).
 
-- [ ] **4M.1** Write failing tests in `crates/fpa-compositor/tests/`:
+- [x] **4M.1** Write failing tests in `crates/fpa-compositor/tests/`:
   - Lock-step outer compositor embeds supervisory inner compositor — works without modification
   - Supervisory outer embeds lock-step inner — works without modification
   - Freshness metadata correctly indicates stale data at strategy boundary
-- [ ] **4M.2** Implement strategy adapter in compositor:
+- [x] **4M.2** Implement strategy adapter in compositor:
   - When inner strategy differs from outer, compositor adapts at boundary
   - Present expected interface to outer layer
   - Freshness metadata attached when output is from cache
-- [ ] **4M.3** All cross-strategy tests pass
+- [x] **4M.3** All cross-strategy tests pass
 
 ### Track H-validation: Documentation Structure Validation
 
@@ -402,12 +402,12 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 > recursive docs structure). Builds on the structural validation test from
 > Phase 1 Track H-structure.
 
-- [ ] **4H.1** Extend structural validation tests:
+- [x] **4H.1** Extend structural validation tests:
   - Verify bidirectional traceability: every requirement in FPA-SRS-000 is referenced by at least one crate-level requirement
   - Verify recursive structure: sub-partitions (from multi-layer) maintain their own `docs/` and `SPECIFICATION.md`
   - Verify test file naming matches requirement IDs across all crates
   - Check for orphan requirements (no parent trace)
-- [ ] **4H.2** All structure validation tests pass across the full workspace
+- [x] **4H.2** All structure validation tests pass across the full workspace
 
 ### Track M2: Runtime Transport in Compositor
 
@@ -415,10 +415,10 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 
 > Depends on: Phase 3b (bus redesign must be complete).
 
-- [ ] **4M2.1** Change `Compositor` and `SupervisoryCompositor` to accept `Box<dyn Bus>` instead of concrete `InProcessBus`
-- [ ] **4M2.2** Update compositor construction to receive bus via dependency injection
-- [ ] **4M2.3** Test: same compositor config runs with `InProcessBus`, `AsyncBus`, `NetworkBus` — identical results
-- [ ] **4M2.4** All runtime transport tests pass
+- [x] **4M2.1** Change `Compositor` and `SupervisoryCompositor` to accept `Box<dyn Bus>` instead of concrete `InProcessBus`
+- [x] **4M2.2** Update compositor construction to receive bus via dependency injection
+- [x] **4M2.3** Test: same compositor config runs with `InProcessBus`, `AsyncBus`, `NetworkBus` — identical results
+- [x] **4M2.4** All runtime transport tests pass
 
 ### Track N: Contract Test Reusability & Reference Data
 
@@ -427,18 +427,18 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 > Can start once Phase 2b is complete (single-layer compositor with tests).
 > Does not depend on Phase 3 tracks.
 
-- [ ] **4N.1** Write failing tests:
+- [x] **4N.1** Write failing tests:
   - `fpa_032.rs`: Same contract test suite runs against alternative impl without modification
   - `fpa_036.rs`: Contract tests assert output properties, not exact values; canonical inputs in contract's test module; tolerances stated in contract
   - `fpa_037.rs`: Compositor tests assert compositional properties (delivery, conservation, ordering); don't fail when partition impl swapped
   - `fpa_039.rs`: Contract version N has own reference data; impl targeting v N unaffected by v N+1
-- [ ] **4N.2** Implement contract versioning:
+- [x] **4N.2** Implement contract versioning:
   - Version field on contract trait
   - Version-scoped canonical inputs and output properties
   - Alternative impl targets specific version
-- [ ] **4N.3** Verify: swap partition impl → contract tests still pass without modification
-- [ ] **4N.4** Verify: swap partition impl → compositor tests still pass (compositional properties stable)
-- [ ] **4N.5** All reference data tests pass
+- [x] **4N.3** Verify: swap partition impl → contract tests still pass without modification
+- [x] **4N.4** Verify: swap partition impl → compositor tests still pass (compositional properties stable)
+- [x] **4N.5** All reference data tests pass
 
 ---
 

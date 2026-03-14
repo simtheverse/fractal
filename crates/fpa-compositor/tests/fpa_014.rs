@@ -12,7 +12,7 @@ fn make_compositor(ids: &[&str]) -> Compositor {
         .map(|id| Box::new(Counter::new(*id)) as Box<dyn fpa_contract::Partition>)
         .collect();
     let bus = InProcessBus::new("test");
-    let mut comp = Compositor::new(partitions, bus);
+    let mut comp = Compositor::new(partitions, Box::new(bus));
     comp.init().unwrap();
     comp
 }
@@ -114,7 +114,7 @@ fn buffer_swap_occurs_before_stepping() {
     let partitions: Vec<Box<dyn fpa_contract::Partition>> =
         vec![Box::new(Counter::new("a"))];
     let bus = InProcessBus::new("test");
-    let mut comp = Compositor::new(partitions, bus);
+    let mut comp = Compositor::new(partitions, Box::new(bus));
     comp.init().unwrap();
 
     // We can't directly write to the compositor's buffer, so we use the

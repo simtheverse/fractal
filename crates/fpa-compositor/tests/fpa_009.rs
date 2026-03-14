@@ -13,7 +13,7 @@ fn compositor_controls_partition_lifecycle() {
         Box::new(Counter::new("b")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     // Init
     compositor.init().unwrap();
@@ -37,7 +37,7 @@ fn after_init_state_is_running() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     assert_eq!(compositor.state(), ExecutionState::Uninitialized);
     compositor.init().unwrap();
@@ -51,7 +51,7 @@ fn after_shutdown_state_is_terminated() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     compositor.shutdown().unwrap();
@@ -65,7 +65,7 @@ fn shared_context_published_each_tick() {
         Box::new(Counter::new("counter")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
 
@@ -93,7 +93,7 @@ fn compositor_arbitrates_requests() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
 
@@ -125,7 +125,7 @@ fn cannot_run_tick_when_not_running() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     // Not initialized yet - should fail
     let result = compositor.run_tick(1.0);
@@ -139,7 +139,7 @@ fn tick_count_increments() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     assert_eq!(compositor.tick_count(), 0);

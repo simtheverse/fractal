@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fpa_bus::{BusExt, InProcessBus};
+use fpa_bus::{Bus, BusExt, InProcessBus};
 use fpa_contract::{Partition, PartitionError, SharedContext};
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 
@@ -43,7 +43,7 @@ pub struct PartitionHandle {
 pub struct SupervisoryCompositor {
     id: String,
     partition_handles: Vec<PartitionHandle>,
-    bus: InProcessBus,
+    bus: Box<dyn Bus>,
     state_machine: StateMachine,
     output_store: Arc<Mutex<HashMap<String, FreshnessEntry>>>,
     heartbeat_timeout: Duration,
@@ -63,10 +63,14 @@ impl SupervisoryCompositor {
     ///
     /// `heartbeat_timeout` controls how long a partition can go without
     /// updating before being considered stale/faulted.
+    ///
+    /// Accepts any `Bus` implementation via `Box<dyn Bus>`, enabling runtime
+    /// transport selection (FPA-004). For convenience with `InProcessBus`,
+    /// use `SupervisoryCompositor::new_default`.
     pub fn new(
         id: impl Into<String>,
         partitions: Vec<Box<dyn Partition>>,
-        bus: InProcessBus,
+        bus: Box<dyn Bus>,
         heartbeat_timeout: Duration,
     ) -> Self {
         Self {
@@ -82,6 +86,19 @@ impl SupervisoryCompositor {
             partition_intervals: HashMap::new(),
             tick_count: 0,
         }
+    }
+
+    /// Create a new supervisory compositor with a default `InProcessBus`.
+    ///
+    /// Convenience constructor for the common case where in-process transport
+    /// is sufficient.
+    pub fn new_default(
+        id: impl Into<String>,
+        partitions: Vec<Box<dyn Partition>>,
+        bus_id: impl Into<String>,
+        heartbeat_timeout: Duration,
+    ) -> Self {
+        Self::new(id, partitions, Box::new(InProcessBus::new(bus_id)), heartbeat_timeout)
     }
 
     /// Set the layer depth for this compositor.
@@ -112,8 +129,8 @@ impl SupervisoryCompositor {
     }
 
     /// Get a reference to the bus.
-    pub fn bus(&self) -> &InProcessBus {
-        &self.bus
+    pub fn bus(&self) -> &dyn Bus {
+        &*self.bus
     }
 
     /// Get a reference to the output store.

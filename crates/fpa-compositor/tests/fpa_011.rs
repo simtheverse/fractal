@@ -198,7 +198,7 @@ fn step_error_is_caught_with_context() {
         Box::new(FailingPartition::new("failer", "step")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -221,7 +221,7 @@ fn panic_during_step_is_caught() {
         Box::new(PanickingPartition::new("panicker")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -244,7 +244,7 @@ fn error_includes_partition_id_and_operation() {
         Box::new(FailingPartition::new("my-partition-42", "step")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     let err = compositor.run_tick(1.0).unwrap_err();
@@ -260,7 +260,7 @@ fn fallback_activated_on_fault() {
         Box::new(FailingPartition::new("primary", "step")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     // Register a fallback for "primary"
     compositor.register_fallback("primary", Box::new(FallbackPartition::new("primary")));
@@ -291,7 +291,7 @@ fn fallback_with_panic_partition() {
         Box::new(PanickingPartition::new("panicker")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.register_fallback("panicker", Box::new(FallbackPartition::new("panicker")));
 
@@ -312,7 +312,7 @@ fn slow_partition_detected_as_timeout() {
         Box::new(SlowPartition::new("slowpoke", 100)),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -335,7 +335,7 @@ fn slow_partition_with_fallback() {
         Box::new(SlowPartition::new("slowpoke", 100)),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.register_fallback("slowpoke", Box::new(FallbackPartition::new("slowpoke")));
 
@@ -352,7 +352,7 @@ fn mixed_healthy_and_failing_partitions() {
         Box::new(FailingPartition::new("failer", "step")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -369,7 +369,7 @@ fn init_failure_transitions_to_error() {
         Box::new(FailingPartition::new("failer", "init")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     let result = compositor.init();
     assert!(result.is_err());
