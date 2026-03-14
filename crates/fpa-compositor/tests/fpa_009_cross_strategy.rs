@@ -192,8 +192,8 @@ async fn supervisory_outer_embeds_lockstep_inner() {
     // The regular counter should have stepped
     let outer_entry = s.get("outer-counter").expect("outer-counter should have output");
     let outer_count = outer_entry
-        .value
-        .as_table()
+        .state()
+        .and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .unwrap();
@@ -204,7 +204,7 @@ async fn supervisory_outer_embeds_lockstep_inner() {
     // lock-step compositor. When used as a Partition, its contribute_state()
     // calls dump(), which wraps each sub-partition in a StateContribution envelope.
     let inner_entry = s.get("lockstep-inner").expect("lockstep-inner should have output");
-    let inner_state = inner_entry.value.as_table().unwrap();
+    let inner_state = inner_entry.state().unwrap().as_table().unwrap();
 
     // The lock-step compositor's contribute_state returns a dump with partitions + system
     assert!(

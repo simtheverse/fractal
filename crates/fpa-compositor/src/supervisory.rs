@@ -15,15 +15,44 @@ use crate::direct_signal::DirectSignal;
 use crate::fault;
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 
+/// The output of a partition task: either successfully contributed state or a fault.
+#[derive(Debug, Clone)]
+pub enum PartitionOutput {
+    /// The partition's contributed state value from `contribute_state()`.
+    State(toml::Value),
+    /// A fault recorded during a lifecycle invocation (FPA-011).
+    Fault {
+        /// The lifecycle operation that faulted (init, step, shutdown, contribute_state).
+        operation: String,
+        /// The error message from the fault.
+        message: String,
+    },
+}
+
 /// An entry in the output store with freshness tracking.
 #[derive(Debug, Clone)]
 pub struct FreshnessEntry {
-    /// The partition's contributed state value.
-    pub value: toml::Value,
+    /// The partition's output — either state or a fault.
+    pub output: PartitionOutput,
     /// When this entry was last updated.
     pub updated_at: Instant,
     /// The tick (step count) when this entry was produced.
     pub tick: u64,
+}
+
+impl FreshnessEntry {
+    /// Returns the state value if this entry contains state (not a fault).
+    pub fn state(&self) -> Option<&toml::Value> {
+        match &self.output {
+            PartitionOutput::State(v) => Some(v),
+            PartitionOutput::Fault { .. } => None,
+        }
+    }
+
+    /// Returns true if this entry contains a fault.
+    pub fn is_fault(&self) -> bool {
+        matches!(&self.output, PartitionOutput::Fault { .. })
+    }
 }
 
 /// Handle to a spawned partition task, used for lifecycle management.
@@ -150,6 +179,14 @@ impl SupervisoryCompositor {
     /// 1. `partition.init()`
     /// 2. Loop: `partition.step(dt)`, `partition.contribute_state()`, write to store
     /// 3. On shutdown signal: `partition.shutdown()`
+    ///
+    /// **Spec finding (FPA-011 vs FPA-009):** The spec requires init faults to
+    /// be propagated "from the compositor's own `init()` call." Under supervisory
+    /// coordination, partition init runs asynchronously in spawned tasks — the
+    /// compositor cannot observe the fault synchronously. Init faults are recorded
+    /// in the output store and propagated on the next `run_tick()` / `step()` /
+    /// `contribute_state()` call. This is an inherent tension between FPA-011's
+    /// synchronous fault model and FPA-009's asynchronous task model.
     pub fn init(&mut self) -> Result<(), PartitionError> {
         self.state_machine
             .request_transition(TransitionRequest {
@@ -175,21 +212,14 @@ impl SupervisoryCompositor {
                 // Initialize — routed through fault wrapper for panic catching
                 // and timeout enforcement (FPA-011).
                 if let Err(e) = fault::safe_init(partition.as_mut()).into_result() {
-                    // Report init error to the output store
                     let mut s = store.lock().unwrap();
-                    let mut error_table = toml::map::Map::new();
-                    error_table.insert(
-                        "error".to_string(),
-                        toml::Value::String(e.message.clone()),
-                    );
-                    error_table.insert(
-                        "operation".to_string(),
-                        toml::Value::String("init".to_string()),
-                    );
                     s.insert(
                         partition.id().to_string(),
                         FreshnessEntry {
-                            value: toml::Value::Table(error_table),
+                            output: PartitionOutput::Fault {
+                                operation: "init".to_string(),
+                                message: e.message.clone(),
+                            },
                             updated_at: Instant::now(),
                             tick: 0,
                         },
@@ -206,19 +236,13 @@ impl SupervisoryCompositor {
                         Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                             if let Err(e) = fault::safe_shutdown(partition.as_mut()).into_result() {
                                 let mut s = store.lock().unwrap();
-                                let mut error_table = toml::map::Map::new();
-                                error_table.insert(
-                                    "error".to_string(),
-                                    toml::Value::String(e.message.clone()),
-                                );
-                                error_table.insert(
-                                    "operation".to_string(),
-                                    toml::Value::String("shutdown".to_string()),
-                                );
                                 s.insert(
                                     partition.id().to_string(),
                                     FreshnessEntry {
-                                        value: toml::Value::Table(error_table),
+                                        output: PartitionOutput::Fault {
+                                            operation: "shutdown".to_string(),
+                                            message: e.message.clone(),
+                                        },
                                         updated_at: Instant::now(),
                                         tick,
                                     },
@@ -231,21 +255,14 @@ impl SupervisoryCompositor {
 
                     // Step — routed through fault wrapper (FPA-011)
                     if let Err(e) = fault::safe_step(partition.as_mut(), dt).into_result() {
-                        // Report step error to the output store
                         let mut s = store.lock().unwrap();
-                        let mut error_table = toml::map::Map::new();
-                        error_table.insert(
-                            "error".to_string(),
-                            toml::Value::String(e.message.clone()),
-                        );
-                        error_table.insert(
-                            "operation".to_string(),
-                            toml::Value::String("step".to_string()),
-                        );
                         s.insert(
                             partition.id().to_string(),
                             FreshnessEntry {
-                                value: toml::Value::Table(error_table),
+                                output: PartitionOutput::Fault {
+                                    operation: "step".to_string(),
+                                    message: e.message.clone(),
+                                },
                                 updated_at: Instant::now(),
                                 tick,
                             },
@@ -276,7 +293,7 @@ impl SupervisoryCompositor {
                             s.insert(
                                 partition.id().to_string(),
                                 FreshnessEntry {
-                                    value,
+                                    output: PartitionOutput::State(value),
                                     updated_at: Instant::now(),
                                     tick,
                                 },
@@ -284,19 +301,13 @@ impl SupervisoryCompositor {
                         }
                         Err(e) => {
                             let mut s = store.lock().unwrap();
-                            let mut error_table = toml::map::Map::new();
-                            error_table.insert(
-                                "error".to_string(),
-                                toml::Value::String(e.message.clone()),
-                            );
-                            error_table.insert(
-                                "operation".to_string(),
-                                toml::Value::String("contribute_state".to_string()),
-                            );
                             s.insert(
                                 partition.id().to_string(),
                                 FreshnessEntry {
-                                    value: toml::Value::Table(error_table),
+                                    output: PartitionOutput::Fault {
+                                        operation: "contribute_state".to_string(),
+                                        message: e.message.clone(),
+                                    },
                                     updated_at: Instant::now(),
                                     tick,
                                 },
@@ -326,8 +337,32 @@ impl SupervisoryCompositor {
         Ok(())
     }
 
+    /// Check the output store for faulted partitions and return the first fault
+    /// as an error, transitioning to Error state (FPA-011).
+    fn check_for_faults(&mut self) -> Result<(), PartitionError> {
+        let store = self.output_store.lock().unwrap();
+        let fault_info = store.iter().find_map(|(id, entry)| {
+            if let PartitionOutput::Fault { operation, message } = &entry.output {
+                Some((id.clone(), operation.clone(), message.clone()))
+            } else {
+                None
+            }
+        });
+        drop(store);
+
+        if let Some((id, operation, message)) = fault_info {
+            self.state_machine.force_state(ExecutionState::Error);
+            return Err(self.make_error(&id, &operation, message));
+        }
+        Ok(())
+    }
+
     /// Read latest state from the output store, check heartbeat freshness,
     /// and publish aggregated state on the bus.
+    ///
+    /// Before publishing, checks for faulted partitions recorded by spawned
+    /// tasks (FPA-011). If any partition has faulted, transitions to Error
+    /// state and returns the fault — propagating it to the outer layer.
     ///
     /// Each partition entry includes freshness metadata:
     /// - `fresh`: whether the partition updated since the last check
@@ -344,41 +379,27 @@ impl SupervisoryCompositor {
             ));
         }
 
+        self.check_for_faults()?;
+
         self.tick_count += 1;
         let now = Instant::now();
 
         let store = self.output_store.lock().unwrap();
         let mut table = toml::map::Map::new();
 
-        // Check for faulted partitions (FPA-011): entries with an "error" field
-        // indicate a fault recorded by a spawned task. Propagate the first fault
-        // to the outer layer by transitioning to Error and returning an error.
-        let fault_info: Option<(String, String, String)> = store.iter().find_map(|(id, entry)| {
-            let error_table = entry.value.as_table()?;
-            let error_msg = error_table.get("error").and_then(|v| v.as_str())?;
-            let operation = error_table
-                .get("operation")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            Some((id.clone(), operation.to_string(), error_msg.to_string()))
-        });
-        if let Some((id, operation, message)) = fault_info {
-            drop(store);
-            self.state_machine.force_state(ExecutionState::Error);
-            return Err(self.make_error(&id, &operation, message));
-        }
-
         for (id, entry) in store.iter() {
-            let age = now.duration_since(entry.updated_at);
-            let fresh = age < self.heartbeat_timeout;
-            let age_ms = age.as_millis() as u64;
+            if let PartitionOutput::State(value) = &entry.output {
+                let age = now.duration_since(entry.updated_at);
+                let fresh = age < self.heartbeat_timeout;
+                let age_ms = age.as_millis() as u64;
 
-            let envelope = StateContribution {
-                state: entry.value.clone(),
-                fresh,
-                age_ms,
-            };
-            table.insert(id.clone(), envelope.to_toml());
+                let envelope = StateContribution {
+                    state: value.clone(),
+                    fresh,
+                    age_ms,
+                };
+                table.insert(id.clone(), envelope.to_toml());
+            }
         }
 
         drop(store);
@@ -435,9 +456,8 @@ impl SupervisoryCompositor {
     /// Shut down all partition tasks gracefully (async) and transition to Terminated.
     ///
     /// This awaits each task's join handle, ensuring all partitions have fully
-    /// stopped before returning. For a sync-compatible version, use the
-    /// `Partition::shutdown()` trait implementation which sends signals without
-    /// awaiting completion.
+    /// stopped before returning. After joining, checks the output store for
+    /// any faults recorded during shutdown (FPA-011).
     pub async fn async_shutdown(&mut self) -> Result<(), PartitionError> {
         self.state_machine
             .request_transition(TransitionRequest {
@@ -453,6 +473,24 @@ impl SupervisoryCompositor {
             let _ = handle.join_handle.await;
         }
 
+        // Check for faults recorded during shutdown (FPA-011).
+        // Must check before transitioning to Terminated so the error
+        // is propagated to the caller.
+        let store = self.output_store.lock().unwrap();
+        let fault_info = store.iter().find_map(|(id, entry)| {
+            if let PartitionOutput::Fault { operation, message } = &entry.output {
+                Some((id.clone(), operation.clone(), message.clone()))
+            } else {
+                None
+            }
+        });
+        drop(store);
+
+        if let Some((id, operation, message)) = fault_info {
+            self.state_machine.force_state(ExecutionState::Error);
+            return Err(self.make_error(&id, &operation, message));
+        }
+
         self.state_machine
             .request_transition(TransitionRequest {
                 requested_by: self.id.clone(),
@@ -464,22 +502,33 @@ impl SupervisoryCompositor {
     }
 
     /// Contribute aggregated state with freshness metadata.
+    ///
+    /// Checks for faulted partitions before contributing state (FPA-011).
+    /// If any partition has faulted, returns an error identifying the faulting
+    /// partition and operation.
     pub fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
         let now = Instant::now();
         let store = self.output_store.lock().unwrap();
         let mut table = toml::map::Map::new();
 
         for (id, entry) in store.iter() {
-            let age = now.duration_since(entry.updated_at);
-            let fresh = age < self.heartbeat_timeout;
-            let age_ms = age.as_millis() as u64;
+            match &entry.output {
+                PartitionOutput::State(value) => {
+                    let age = now.duration_since(entry.updated_at);
+                    let fresh = age < self.heartbeat_timeout;
+                    let age_ms = age.as_millis() as u64;
 
-            let envelope = StateContribution {
-                state: entry.value.clone(),
-                fresh,
-                age_ms,
-            };
-            table.insert(id.clone(), envelope.to_toml());
+                    let envelope = StateContribution {
+                        state: value.clone(),
+                        fresh,
+                        age_ms,
+                    };
+                    table.insert(id.clone(), envelope.to_toml());
+                }
+                PartitionOutput::Fault { operation, message } => {
+                    return Err(self.make_error(id, operation, message.clone()));
+                }
+            }
         }
 
         Ok(toml::Value::Table(table))
@@ -578,7 +627,7 @@ impl Partition for SupervisoryCompositor {
                 store.insert(
                     id.clone(),
                     FreshnessEntry {
-                        value: inner,
+                        output: PartitionOutput::State(inner),
                         updated_at: Instant::now(),
                         tick: 0,
                     },

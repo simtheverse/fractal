@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use fpa_bus::{BusExt, BusReader, InProcessBus};
 use fpa_compositor::compositor::SharedContext;
-use fpa_compositor::supervisory::{FreshnessEntry, SupervisoryCompositor};
+use fpa_compositor::supervisory::{FreshnessEntry, PartitionOutput, SupervisoryCompositor};
 use fpa_contract::test_support::Counter;
 use fpa_contract::{Partition, PartitionError};
 
@@ -40,6 +40,29 @@ async fn wait_for_output(
         }
         if Instant::now() > deadline {
             panic!("timed out waiting for partition '{}' output", id);
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Poll the output store until the given partition has a fault entry, or panic on timeout.
+async fn wait_for_fault(
+    store: &Arc<Mutex<HashMap<String, FreshnessEntry>>>,
+    id: &str,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        {
+            let s = store.lock().unwrap();
+            if let Some(entry) = s.get(id) {
+                if entry.is_fault() {
+                    return;
+                }
+            }
+        }
+        if Instant::now() > deadline {
+            panic!("timed out waiting for partition '{}' fault", id);
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
@@ -71,8 +94,8 @@ async fn partition_runs_own_processing_loop() {
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("counter-1").expect("partition should have written state");
     let count = entry
-        .value
-        .as_table()
+        .state()
+        .and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .unwrap();
@@ -118,7 +141,7 @@ async fn lifecycle_management_init_and_shutdown() {
         let store = compositor.output_store().lock().unwrap();
         store
             .get("counter-1")
-            .and_then(|e| e.value.as_table())
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
             .and_then(|t| t.get("count"))
             .and_then(|v| v.as_integer())
             .unwrap_or(0)
@@ -137,7 +160,7 @@ async fn lifecycle_management_init_and_shutdown() {
         let store = compositor.output_store().lock().unwrap();
         store
             .get("counter-1")
-            .and_then(|e| e.value.as_table())
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
             .and_then(|t| t.get("count"))
             .and_then(|v| v.as_integer())
             .unwrap_or(0)
@@ -304,14 +327,14 @@ async fn multiple_partitions_run_independently() {
 
     let count_a = s
         .get("counter-a")
-        .and_then(|e| e.value.as_table())
+        .and_then(|e| e.state()).and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .expect("counter-a should have state");
 
     let count_b = s
         .get("counter-b")
-        .and_then(|e| e.value.as_table())
+        .and_then(|e| e.state()).and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .expect("counter-b should have state");
@@ -443,14 +466,14 @@ async fn per_partition_step_interval() {
     let s = store.lock().unwrap();
     let fast_count = s
         .get("fast")
-        .and_then(|e| e.value.as_table())
+        .and_then(|e| e.state()).and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .unwrap_or(0);
 
     let slow_count = s
         .get("slow")
-        .and_then(|e| e.value.as_table())
+        .and_then(|e| e.state()).and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .unwrap_or(0);
@@ -515,26 +538,17 @@ async fn partition_step_error_reported_to_store() {
 
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("failing-1").expect("should have error entry");
-    let error_msg = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("error"))
-        .and_then(|v| v.as_str());
-    assert!(
-        error_msg.is_some(),
-        "error should be reported in the output store"
-    );
-    assert!(
-        error_msg.unwrap().contains("intentional failure"),
-        "error message should contain the failure reason"
-    );
-
-    let operation = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("operation"))
-        .and_then(|v| v.as_str());
-    assert_eq!(operation, Some("step"));
+    match &entry.output {
+        PartitionOutput::Fault { operation, message } => {
+            assert!(
+                message.contains("intentional failure"),
+                "error message should contain the failure reason, got: {}",
+                message
+            );
+            assert_eq!(operation, "step");
+        }
+        PartitionOutput::State(_) => panic!("expected fault, got state"),
+    }
 }
 
 // --- FPA-011 supervisory fault handling tests ---
@@ -647,31 +661,20 @@ async fn panic_during_supervisory_step_is_caught() {
 
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("panicker").expect("should have error entry");
-    let error_msg = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("error"))
-        .and_then(|v| v.as_str());
-    assert!(
-        error_msg.is_some(),
-        "panic should be caught and reported as error in the output store"
-    );
-    assert!(
-        error_msg.unwrap().contains("panic"),
-        "error message should mention panic: {:?}",
-        error_msg
-    );
-
-    let operation = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("operation"))
-        .and_then(|v| v.as_str());
-    assert_eq!(
-        operation,
-        Some("step"),
-        "error should identify the faulting operation"
-    );
+    match &entry.output {
+        PartitionOutput::Fault { operation, message } => {
+            assert!(
+                message.contains("panic"),
+                "error message should mention panic: {}",
+                message
+            );
+            assert_eq!(
+                operation, "step",
+                "error should identify the faulting operation"
+            );
+        }
+        PartitionOutput::State(_) => panic!("expected fault, got state"),
+    }
 }
 
 /// FPA-011: A partition panicking during init() in a supervisory task should be
@@ -699,31 +702,20 @@ async fn panic_during_supervisory_init_is_caught() {
 
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("panicker").expect("should have error entry");
-    let error_msg = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("error"))
-        .and_then(|v| v.as_str());
-    assert!(
-        error_msg.is_some(),
-        "init panic should be caught and reported as error"
-    );
-    assert!(
-        error_msg.unwrap().contains("panic"),
-        "error message should mention panic: {:?}",
-        error_msg
-    );
-
-    let operation = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("operation"))
-        .and_then(|v| v.as_str());
-    assert_eq!(
-        operation,
-        Some("init"),
-        "error should identify init as the faulting operation"
-    );
+    match &entry.output {
+        PartitionOutput::Fault { operation, message } => {
+            assert!(
+                message.contains("panic"),
+                "error message should mention panic: {}",
+                message
+            );
+            assert_eq!(
+                operation, "init",
+                "error should identify init as the faulting operation"
+            );
+        }
+        PartitionOutput::State(_) => panic!("expected fault, got state"),
+    }
 }
 
 /// FPA-011: A partition whose step() exceeds the 50ms timeout should be
@@ -752,20 +744,16 @@ async fn slow_supervisory_step_detected_as_timeout() {
 
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("slowpoke").expect("should have entry");
-    let error_msg = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("error"))
-        .and_then(|v| v.as_str());
-    assert!(
-        error_msg.is_some(),
-        "slow step should be detected as timeout fault"
-    );
-    assert!(
-        error_msg.unwrap().contains("timeout") || error_msg.unwrap().contains("exceeded"),
-        "error message should mention timeout: {:?}",
-        error_msg
-    );
+    match &entry.output {
+        PartitionOutput::Fault { message, .. } => {
+            assert!(
+                message.contains("timeout") || message.contains("exceeded"),
+                "error message should mention timeout: {}",
+                message
+            );
+        }
+        PartitionOutput::State(_) => panic!("expected timeout fault, got state"),
+    }
 }
 
 /// FPA-011: A partition whose init() exceeds the 500ms timeout should be
@@ -794,20 +782,16 @@ async fn slow_supervisory_init_detected_as_timeout() {
 
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("slowpoke").expect("should have entry");
-    let error_msg = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("error"))
-        .and_then(|v| v.as_str());
-    assert!(
-        error_msg.is_some(),
-        "slow init should be detected as timeout fault"
-    );
-    assert!(
-        error_msg.unwrap().contains("timeout") || error_msg.unwrap().contains("exceeded"),
-        "error message should mention timeout: {:?}",
-        error_msg
-    );
+    match &entry.output {
+        PartitionOutput::Fault { message, .. } => {
+            assert!(
+                message.contains("timeout") || message.contains("exceeded"),
+                "error message should mention timeout: {}",
+                message
+            );
+        }
+        PartitionOutput::State(_) => panic!("expected timeout fault, got state"),
+    }
 }
 
 /// FPA-011: Error context from supervisory tasks should include the partition
@@ -862,22 +846,21 @@ async fn supervisory_error_includes_partition_id_and_operation() {
 
     compositor.init().unwrap();
 
-    // Wait for the error to surface in the output store
-    wait_for_output(compositor.output_store(), "my-partition-42", Duration::from_secs(2)).await;
+    // Wait for the fault to surface in the output store (the partition succeeds
+    // on the first step, so wait_for_output would return the initial state entry)
+    wait_for_fault(compositor.output_store(), "my-partition-42", Duration::from_secs(2)).await;
 
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("my-partition-42").expect("should have entry");
-    let table = entry.value.as_table().unwrap();
-
-    // Error should contain partition identity and operation
-    if let Some(error) = table.get("error").and_then(|v| v.as_str()) {
-        assert!(
-            error.contains("specific-failure-message"),
-            "error should preserve the original error message: {}",
-            error
-        );
-    }
-    if let Some(operation) = table.get("operation").and_then(|v| v.as_str()) {
-        assert_eq!(operation, "step", "error should identify the faulting operation");
+    match &entry.output {
+        PartitionOutput::Fault { operation, message } => {
+            assert!(
+                message.contains("specific-failure-message"),
+                "error should preserve the original error message: {}",
+                message
+            );
+            assert_eq!(operation, "step", "error should identify the faulting operation");
+        }
+        PartitionOutput::State(_) => panic!("expected fault, got state"),
     }
 }
