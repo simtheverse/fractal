@@ -459,12 +459,9 @@ impl Compositor {
         }
 
         // Assemble shared context from current tick's partition outputs
-        // and publish on the bus. Note: FPA-014 places this in Phase 1
-        // using tick N-1 outputs, but the double-buffer isolation invariant
-        // (fpa_014 tests) requires the first tick's read buffer to be empty.
-        // Publishing after Phase 2 ensures SharedContext has current data
-        // and is consistent with the tick barrier guarantee ("all partitions
-        // complete before shared context assembly").
+        // and publish on the bus (FPA-014: after the tick barrier, before
+        // Phase 3). SharedContext reflects the complete, consistent state
+        // of all partitions after stepping.
         {
             let mut table = toml::map::Map::new();
             for (id, value) in self.double_buffer.write_all() {
