@@ -440,16 +440,19 @@ before any `step()`; `step(dt)` shall be called with `dt` equal to the elapsed t
 the previous step invocation; `shutdown()` shall be called after all steps complete;
 `load_state()` shall only be called when no `step()` is in flight.
 
-Under supervisory coordination, the synchronous `shutdown()` method on the Partition
-trait constitutes a shutdown *signal* — it instructs sub-partitions to stop but does not
-guarantee that all asynchronous work has ceased by the time it returns. This is inherent
-to the model: sub-partitions running on separate tasks, processes, or nodes cannot be
-synchronously joined through a synchronous trait method. Shutdown *confirmation* — the
-guarantee that sub-partitions have actually stopped — requires a mechanism outside the
-synchronous trait, such as an async shutdown path or the compositor's existing fault
-detection mechanisms (heartbeat expiry, connection state). The compositor retains
-shutdown authority in both cases: it decides *when* to signal shutdown, and it detects
-*whether* sub-partitions have actually stopped.
+Under supervisory coordination, the synchronous `init()` and `shutdown()` methods on
+the Partition trait constitute lifecycle *signals* — they spawn or stop sub-partition
+tasks but do not guarantee that initialization has completed or that all asynchronous
+work has ceased by the time they return. This is inherent to the model: sub-partitions
+running on separate tasks, processes, or nodes cannot be synchronously joined through
+a synchronous trait method. Lifecycle *confirmation* — the guarantee that sub-partitions
+have actually initialized or stopped — requires a mechanism outside the synchronous
+trait, such as an async init/shutdown path or the compositor's existing fault detection
+mechanisms (heartbeat expiry, connection state). A supervisory compositor should provide
+async counterparts (e.g., `async_init()`, `async_shutdown()`) that await sub-partition
+lifecycle completion and propagate faults per FPA-011. The compositor retains lifecycle
+authority in both cases: it decides *when* to signal init/shutdown, and it detects
+*whether* sub-partitions have actually completed or faulted.
 
 The execution strategy (lock-step, multi-rate, supervisory) is a compositor concern and
 is runtime-configurable. The Partition trait is strategy-neutral — it defines the

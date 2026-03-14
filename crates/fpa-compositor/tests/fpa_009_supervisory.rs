@@ -678,7 +678,7 @@ async fn panic_during_supervisory_step_is_caught() {
 }
 
 /// FPA-011: A partition panicking during init() in a supervisory task should be
-/// caught and returned from the compositor's own init() call.
+/// caught and returned from async_init().
 #[tokio::test]
 async fn panic_during_supervisory_init_is_caught() {
     let bus = InProcessBus::new("test-bus");
@@ -695,9 +695,9 @@ async fn panic_during_supervisory_init_is_caught() {
     )
     .with_step_interval(Duration::from_millis(5));
 
-    // Init should return the panic as an error from its own call (FPA-011)
-    let result = compositor.init();
-    assert!(result.is_err(), "init should return error when partition panics");
+    // async_init awaits init completion and returns faults (FPA-011)
+    let result = compositor.async_init().await;
+    assert!(result.is_err(), "async_init should return error when partition panics");
 
     let err = result.unwrap_err();
     assert!(
@@ -755,7 +755,7 @@ async fn slow_supervisory_step_detected_as_timeout() {
 }
 
 /// FPA-011: A partition whose init() exceeds the 500ms timeout should be
-/// returned as a fault from the compositor's own init() call.
+/// returned as a fault from async_init().
 #[tokio::test]
 async fn slow_supervisory_init_detected_as_timeout() {
     let bus = InProcessBus::new("test-bus");
@@ -773,11 +773,9 @@ async fn slow_supervisory_init_detected_as_timeout() {
     )
     .with_step_interval(Duration::from_millis(5));
 
-    // Init should return the timeout as an error from its own call (FPA-011).
-    // The error may come from safe_init's internal timeout detection or from
-    // the compositor's recv_timeout deadline — both are valid.
-    let result = compositor.init();
-    assert!(result.is_err(), "init should return error when partition times out");
+    // async_init awaits init completion and returns timeouts (FPA-011).
+    let result = compositor.async_init().await;
+    assert!(result.is_err(), "async_init should return error when partition times out");
 
     let err = result.unwrap_err();
     assert!(

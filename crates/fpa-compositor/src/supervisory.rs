@@ -173,18 +173,17 @@ impl SupervisoryCompositor {
         &self.output_store
     }
 
-    /// Initialize the supervisory compositor: spawn each partition as a task.
+    /// Spawn partition tasks and transition to Running.
     ///
-    /// Initialization runs on OS threads (not tokio tasks) so the init phase
-    /// completes synchronously regardless of the tokio runtime flavor. Each
-    /// partition's `init()` is routed through `fault::safe_init()` for panic
-    /// catching and 500ms timeout enforcement (FPA-011). If any partition
-    /// faults during init, this method transitions to Error and returns the
-    /// fault — satisfying FPA-011's requirement that init faults propagate
-    /// "from the compositor's own `init()` call."
+    /// Each partition is moved into its own tokio task that runs `init()`,
+    /// then loops `step()` / `contribute_state()`. This method returns
+    /// immediately after spawning — it does NOT wait for partition init to
+    /// complete. This is the synchronous counterpart to [`async_init`],
+    /// following the same pattern as `shutdown()` vs `async_shutdown()`:
+    /// the sync method signals intent, the async method confirms completion.
     ///
-    /// After all partitions initialize successfully, tokio tasks are spawned
-    /// for the step/contribute_state loop.
+    /// For init fault propagation per FPA-011, use [`async_init`] which
+    /// awaits init completion and returns faults from its own call.
     pub fn init(&mut self) -> Result<(), PartitionError> {
         self.state_machine
             .request_transition(TransitionRequest {
@@ -193,50 +192,99 @@ impl SupervisoryCompositor {
             })
             .map_err(|e| self.make_error("compositor", "init", e.to_string()))?;
 
-        let partitions = std::mem::take(&mut self.pending_partitions);
+        self.spawn_partition_tasks();
 
-        // Phase 1: Initialize all partitions on OS threads (not tokio tasks)
-        // so we can wait synchronously without blocking the tokio runtime.
-        type InitResult = Result<Box<dyn Partition>, (String, PartitionError)>;
-        let (tx, rx) = std::sync::mpsc::channel::<InitResult>();
+        self.state_machine
+            .request_transition(TransitionRequest {
+                requested_by: self.id.clone(),
+                target_state: ExecutionState::Running,
+            })
+            .map_err(|e| self.make_error("compositor", "init", e.to_string()))?;
 
-        let partition_count = partitions.len();
-        for mut partition in partitions {
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                let id = partition.id().to_string();
-                match fault::safe_init(partition.as_mut()).into_result() {
-                    Ok(()) => { let _ = tx.send(Ok(partition)); }
-                    Err(e) => { let _ = tx.send(Err((id, e))); }
-                }
-            });
-        }
-        drop(tx);
+        Ok(())
+    }
 
-        let mut initialized: Vec<Box<dyn Partition>> = Vec::with_capacity(partition_count);
-        let deadline = Instant::now() + fault::INIT_TIMEOUT;
+    /// Initialize the supervisory compositor with confirmed init completion.
+    ///
+    /// Spawns each partition as a tokio task, then awaits until all partitions
+    /// have completed their `init()` call (by producing their first output
+    /// store entry). If any partition faults during init, transitions to Error
+    /// and returns the fault from this call — satisfying FPA-011's requirement
+    /// that init faults propagate from the compositor's own init invocation.
+    ///
+    /// This mirrors the `async_shutdown()` pattern: the sync `init()` signals
+    /// intent (spawns tasks), while `async_init()` confirms completion (awaits
+    /// init results and propagates faults).
+    pub async fn async_init(&mut self) -> Result<(), PartitionError> {
+        self.state_machine
+            .request_transition(TransitionRequest {
+                requested_by: self.id.clone(),
+                target_state: ExecutionState::Initializing,
+            })
+            .map_err(|e| self.make_error("compositor", "init", e.to_string()))?;
 
-        for _ in 0..partition_count {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            match rx.recv_timeout(remaining) {
-                Ok(Ok(partition)) => initialized.push(partition),
-                Ok(Err((id, e))) => {
+        self.spawn_partition_tasks();
+
+        // Wait for all partitions to produce their first output store entry
+        // (state from a successful init+step+contribute_state, or a fault).
+        let partition_ids: Vec<String> = self.partition_handles.iter()
+            .map(|h| h.id.clone())
+            .collect();
+        let init_deadline = Instant::now() + fault::INIT_TIMEOUT;
+
+        loop {
+            {
+                let store = self.output_store.lock().unwrap();
+
+                // Check for faults first — fail fast
+                if let Some((id, operation, message)) = store.iter().find_map(|(id, entry)| {
+                    if let PartitionOutput::Fault { operation, message } = &entry.output {
+                        Some((id.clone(), operation.clone(), message.clone()))
+                    } else {
+                        None
+                    }
+                }) {
+                    drop(store);
                     self.state_machine.force_state(ExecutionState::Error);
-                    return Err(self.make_error(&id, &e.operation, e.message));
+                    return Err(self.make_error(&id, &operation, message));
                 }
-                Err(_) => {
-                    self.state_machine.force_state(ExecutionState::Error);
-                    return Err(self.make_error(
-                        "compositor",
-                        "init",
-                        "partition(s) did not complete init within deadline".to_string(),
-                    ));
+
+                // Check if all partitions have reported
+                if partition_ids.iter().all(|id| store.contains_key(id)) {
+                    break;
                 }
             }
+
+            if Instant::now() >= init_deadline {
+                self.state_machine.force_state(ExecutionState::Error);
+                return Err(self.make_error(
+                    "compositor",
+                    "init",
+                    "partition(s) did not complete init within deadline".to_string(),
+                ));
+            }
+
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
-        // Phase 2: All partitions initialized — spawn tokio tasks for step loops.
-        for mut partition in initialized {
+        self.state_machine
+            .request_transition(TransitionRequest {
+                requested_by: self.id.clone(),
+                target_state: ExecutionState::Running,
+            })
+            .map_err(|e| self.make_error("compositor", "init", e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Spawn partition tasks for the init/step/contribute_state loop.
+    ///
+    /// Consumes pending partitions and creates a tokio task for each one.
+    /// Called by both `init()` and `async_init()`.
+    fn spawn_partition_tasks(&mut self) {
+        let partitions = std::mem::take(&mut self.pending_partitions);
+
+        for mut partition in partitions {
             let partition_id = partition.id().to_string();
             let store = Arc::clone(&self.output_store);
             let signals = Arc::clone(&self.emitted_signals);
@@ -248,6 +296,24 @@ impl SupervisoryCompositor {
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let join_handle = tokio::spawn(async move {
+                // Initialize — routed through fault wrapper for panic catching
+                // and timeout enforcement (FPA-011).
+                if let Err(e) = fault::safe_init(partition.as_mut()).into_result() {
+                    let mut s = store.lock().unwrap();
+                    s.insert(
+                        partition.id().to_string(),
+                        FreshnessEntry {
+                            output: PartitionOutput::Fault {
+                                operation: "init".to_string(),
+                                message: e.message.clone(),
+                            },
+                            updated_at: Instant::now(),
+                            tick: 0,
+                        },
+                    );
+                    return;
+                }
+
                 let mut tick: u64 = 0;
                 let dt = step_interval.as_secs_f64();
 
@@ -347,15 +413,6 @@ impl SupervisoryCompositor {
                 shutdown_tx,
             });
         }
-
-        self.state_machine
-            .request_transition(TransitionRequest {
-                requested_by: self.id.clone(),
-                target_state: ExecutionState::Running,
-            })
-            .map_err(|e| self.make_error("compositor", "init", e.to_string()))?;
-
-        Ok(())
     }
 
     /// Check the output store for faulted partitions and return the first fault
@@ -571,9 +628,10 @@ impl SupervisoryCompositor {
 /// Implement `Partition` for `SupervisoryCompositor`, enabling nesting (FPA-001).
 ///
 /// A supervisory compositor can itself be a partition inside an outer compositor,
-/// creating fractal nesting. Note that `shutdown()` is synchronous here: it sends
-/// shutdown signals but does not await task completion. Use `async_shutdown()` for
-/// graceful async shutdown with join.
+/// creating fractal nesting. The sync `init()` and `shutdown()` methods signal
+/// intent (spawn/stop tasks) but do not confirm completion. Use `async_init()`
+/// and `async_shutdown()` for confirmed lifecycle transitions with fault
+/// propagation per FPA-011.
 impl Partition for SupervisoryCompositor {
     fn id(&self) -> &str {
         &self.id
