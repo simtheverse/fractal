@@ -5,18 +5,22 @@
 //! depending on the compositor crate — consistent with FPA-003 and FPA-005.
 
 use crate::message::{DeliverySemantic, Message};
+use crate::state_machine::ExecutionState;
 
 /// Aggregated partition state published on the bus each tick.
 ///
 /// The compositor collects `contribute_state()` results from all partitions
 /// and publishes them as a single `SharedContext` message on the layer bus.
-/// Partitions subscribe to this type to observe their peers' state.
+/// Partitions subscribe to this type to observe their peers' state and the
+/// compositor's execution state (FPA-009).
 #[derive(Debug, Clone)]
 pub struct SharedContext {
     /// Aggregated partition states keyed by partition ID.
     pub state: toml::Value,
     /// The tick number when this context was produced.
     pub tick: u64,
+    /// The compositor's execution state at the time of publication (FPA-009).
+    pub execution_state: ExecutionState,
 }
 
 impl Message for SharedContext {

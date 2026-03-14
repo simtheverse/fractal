@@ -61,15 +61,24 @@ impl Partition for FailingPartition {
     }
 }
 
-/// A partition that panics during step().
+/// A partition that panics during a specified operation.
 struct PanickingPartition {
     id: String,
+    panic_on: String,
 }
 
 impl PanickingPartition {
     fn new(id: &str) -> Self {
         Self {
             id: id.to_string(),
+            panic_on: "step".to_string(),
+        }
+    }
+
+    fn on(id: &str, operation: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            panic_on: operation.to_string(),
         }
     }
 }
@@ -80,30 +89,46 @@ impl Partition for PanickingPartition {
     }
 
     fn init(&mut self) -> Result<(), PartitionError> {
+        if self.panic_on == "init" {
+            panic!("partition panicked during init");
+        }
         Ok(())
     }
 
     fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
-        panic!("partition panicked during step");
+        if self.panic_on == "step" {
+            panic!("partition panicked during step");
+        }
+        Ok(())
     }
 
     fn shutdown(&mut self) -> Result<(), PartitionError> {
+        if self.panic_on == "shutdown" {
+            panic!("partition panicked during shutdown");
+        }
         Ok(())
     }
 
     fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+        if self.panic_on == "contribute_state" {
+            panic!("partition panicked during contribute_state");
+        }
         Ok(toml::Value::Table(toml::map::Map::new()))
     }
 
     fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
+        if self.panic_on == "load_state" {
+            panic!("partition panicked during load_state");
+        }
         Ok(())
     }
 }
 
-/// A partition that sleeps during step() to test timeout detection.
+/// A partition that sleeps during a specified operation to test timeout detection.
 struct SlowPartition {
     id: String,
     delay_ms: u64,
+    slow_on: String,
 }
 
 impl SlowPartition {
@@ -111,6 +136,21 @@ impl SlowPartition {
         Self {
             id: id.to_string(),
             delay_ms,
+            slow_on: "step".to_string(),
+        }
+    }
+
+    fn on(id: &str, delay_ms: u64, operation: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            delay_ms,
+            slow_on: operation.to_string(),
+        }
+    }
+
+    fn maybe_sleep(&self, operation: &str) {
+        if self.slow_on == operation {
+            std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
         }
     }
 }
@@ -121,23 +161,27 @@ impl Partition for SlowPartition {
     }
 
     fn init(&mut self) -> Result<(), PartitionError> {
+        self.maybe_sleep("init");
         Ok(())
     }
 
     fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
-        std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
+        self.maybe_sleep("step");
         Ok(())
     }
 
     fn shutdown(&mut self) -> Result<(), PartitionError> {
+        self.maybe_sleep("shutdown");
         Ok(())
     }
 
     fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+        self.maybe_sleep("contribute_state");
         Ok(toml::Value::Table(toml::map::Map::new()))
     }
 
     fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
+        self.maybe_sleep("load_state");
         Ok(())
     }
 }
@@ -375,4 +419,204 @@ fn init_failure_transitions_to_error() {
     let result = compositor.init();
     assert!(result.is_err());
     assert_eq!(compositor.state(), ExecutionState::Error);
+}
+
+// --- New tests: panics across all lifecycle methods (FPA-011 audit gap) ---
+
+/// Panic during init() is caught and returned as error with correct context.
+#[test]
+fn panic_during_init_is_caught() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(PanickingPartition::on("panicker", "init")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    let result = compositor.init();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.partition_id, "panicker");
+    assert_eq!(err.operation, "init");
+    assert!(
+        err.message.contains("panic"),
+        "error message should mention panic: {}",
+        err.message
+    );
+}
+
+/// Panic during shutdown() is caught and returned as error.
+#[test]
+fn panic_during_shutdown_is_caught() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(PanickingPartition::on("panicker", "shutdown")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    compositor.init().unwrap();
+    let result = compositor.shutdown();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.partition_id, "panicker");
+    assert!(
+        err.message.contains("panic"),
+        "error message should mention panic: {}",
+        err.message
+    );
+}
+
+/// Panic during contribute_state() is caught (via dump).
+#[test]
+fn panic_during_contribute_state_is_caught() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(PanickingPartition::on("panicker", "contribute_state")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    compositor.init().unwrap();
+    let result = compositor.dump();
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.partition_id, "panicker");
+    assert!(
+        err.message.contains("panic"),
+        "error message should mention panic: {}",
+        err.message
+    );
+}
+
+/// Panic during load_state() is caught.
+#[test]
+fn panic_during_load_state_is_caught() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(PanickingPartition::on("panicker", "load_state")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    compositor.init().unwrap();
+    compositor.pause().unwrap();
+
+    let state: toml::Value = toml::from_str(
+        r#"
+        [system]
+        tick_count = 0
+        [partitions.panicker]
+        fresh = true
+        age_ms = 0
+        [partitions.panicker.state]
+        "#,
+    )
+    .unwrap();
+
+    let result = compositor.load(state);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.partition_id, "panicker");
+    assert!(
+        err.message.contains("panic"),
+        "error message should mention panic: {}",
+        err.message
+    );
+}
+
+// --- New tests: timeouts for init, shutdown, contribute_state (FPA-011 audit gap) ---
+
+/// Init exceeding 500ms timeout is detected as fault.
+#[test]
+fn slow_init_detected_as_timeout() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(SlowPartition::on("slowpoke", 600, "init")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    let result = compositor.init();
+    assert!(result.is_err(), "slow init should be detected as timeout fault");
+    let err = result.unwrap_err();
+    assert_eq!(err.partition_id, "slowpoke");
+    assert_eq!(err.operation, "init");
+    assert!(
+        err.message.contains("timeout") || err.message.contains("exceeded"),
+        "error should mention timeout: {}",
+        err.message
+    );
+}
+
+/// Shutdown exceeding 500ms timeout is detected as fault.
+#[test]
+fn slow_shutdown_detected_as_timeout() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(SlowPartition::on("slowpoke", 600, "shutdown")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    compositor.init().unwrap();
+    let result = compositor.shutdown();
+    assert!(result.is_err(), "slow shutdown should be detected as timeout fault");
+    let err = result.unwrap_err();
+    assert_eq!(err.partition_id, "slowpoke");
+    assert!(
+        err.message.contains("timeout") || err.message.contains("exceeded"),
+        "error should mention timeout: {}",
+        err.message
+    );
+}
+
+/// contribute_state() exceeding 50ms timeout is detected as fault (via dump).
+#[test]
+fn slow_contribute_state_detected_as_timeout() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(SlowPartition::on("slowpoke", 100, "contribute_state")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    compositor.init().unwrap();
+    let result = compositor.dump();
+    assert!(result.is_err(), "slow contribute_state should be detected as timeout fault");
+    let err = result.unwrap_err();
+    assert_eq!(err.partition_id, "slowpoke");
+    assert!(
+        err.message.contains("timeout") || err.message.contains("exceeded"),
+        "error should mention timeout: {}",
+        err.message
+    );
+}
+
+// --- New test: fallback identity mismatch rejected (FPA-011 audit gap) ---
+
+/// Registering a fallback with mismatched id panics.
+#[test]
+#[should_panic(expected = "fallback id")]
+fn fallback_identity_mismatch_rejected() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(FallbackPartition::new("primary")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    // Fallback has id "wrong-id" but is registered for "primary"
+    compositor.register_fallback("primary", Box::new(FallbackPartition::new("wrong-id")));
+}
+
+/// Init error includes correct operation context (not "step").
+#[test]
+fn error_during_init_includes_operation_context() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(FailingPartition::new("failer", "init")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    let err = compositor.init().unwrap_err();
+    assert_eq!(err.partition_id, "failer");
+    assert_eq!(err.operation, "init");
+    assert!(
+        err.message.contains("deliberate init failure"),
+        "error should contain original message: {}",
+        err.message
+    );
 }

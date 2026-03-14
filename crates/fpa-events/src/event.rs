@@ -7,27 +7,37 @@ use std::collections::HashMap;
 pub enum EventTrigger {
     /// Fire at (or after) the specified simulation time.
     Time { at: f64 },
-    /// Fire when a named signal satisfies a predicate.
-    Condition { signal: String, predicate: Predicate },
+    /// Fire when a predicate over named signals is satisfied.
+    Condition { predicate: Predicate },
 }
 
 /// Composable predicate for condition-triggered events.
+///
+/// Each leaf predicate references a named signal and a threshold. The `And`
+/// combinator enables cross-signal compound conditions (e.g.,
+/// `signal_a > 1.0 && signal_b < 500.0`) as required by FPA-026.
 #[derive(Debug, Clone)]
 pub enum Predicate {
-    LessThan(f64),
-    GreaterThan(f64),
-    Equal(f64),
+    LessThan { signal: String, threshold: f64 },
+    GreaterThan { signal: String, threshold: f64 },
+    Equal { signal: String, threshold: f64 },
     And(Box<Predicate>, Box<Predicate>),
 }
 
 impl Predicate {
-    /// Evaluate this predicate against a concrete signal value.
-    pub fn evaluate(&self, value: f64) -> bool {
+    /// Evaluate this predicate against a map of named signal values.
+    pub fn evaluate(&self, signals: &HashMap<String, f64>) -> bool {
         match self {
-            Predicate::LessThan(threshold) => value < *threshold,
-            Predicate::GreaterThan(threshold) => value > *threshold,
-            Predicate::Equal(threshold) => value == *threshold,
-            Predicate::And(a, b) => a.evaluate(value) && b.evaluate(value),
+            Predicate::LessThan { signal, threshold } => {
+                signals.get(signal).map_or(false, |v| *v < *threshold)
+            }
+            Predicate::GreaterThan { signal, threshold } => {
+                signals.get(signal).map_or(false, |v| *v > *threshold)
+            }
+            Predicate::Equal { signal, threshold } => {
+                signals.get(signal).map_or(false, |v| *v == *threshold)
+            }
+            Predicate::And(a, b) => a.evaluate(signals) && b.evaluate(signals),
         }
     }
 }

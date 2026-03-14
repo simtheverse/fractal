@@ -215,10 +215,12 @@ fn event_config_converts_to_event_definition_condition_trigger() {
     );
     assert!(def.armed);
     match &def.trigger {
-        EventTrigger::Condition { signal, predicate } => {
-            assert_eq!(signal, "physics.temperature");
-            assert!(predicate.evaluate(150.0), "150 > 100 should be true");
-            assert!(!predicate.evaluate(50.0), "50 > 100 should be false");
+        EventTrigger::Condition { predicate } => {
+            let mut signals = std::collections::HashMap::new();
+            signals.insert("physics.temperature".to_string(), 150.0);
+            assert!(predicate.evaluate(&signals), "150 > 100 should be true");
+            signals.insert("physics.temperature".to_string(), 50.0);
+            assert!(!predicate.evaluate(&signals), "50 > 100 should be false");
         }
         _ => panic!("expected Condition trigger"),
     }

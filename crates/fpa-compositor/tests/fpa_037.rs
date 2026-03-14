@@ -348,8 +348,10 @@ fn assert_dump_load_roundtrip(partitions: Vec<Box<dyn Partition>>) {
     assert!(system.contains_key("tick_count"));
     assert!(system.contains_key("elapsed_time"));
 
-    // Load the snapshot back
+    // Load the snapshot back (must pause first per FPA-023)
+    comp.pause().unwrap();
     comp.load(snapshot.clone()).unwrap();
+    comp.resume().unwrap();
 
     // After load, dump again and verify structural equality
     let reloaded = comp.dump().unwrap();

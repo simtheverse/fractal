@@ -31,10 +31,22 @@ pub enum RelayPolicy {
     Aggregate,
 }
 
+/// A pending lifecycle operation to be processed in Phase 1 (FPA-014).
+pub enum LifecycleOp {
+    /// Add a new partition to the compositor.
+    Spawn(Box<dyn Partition>),
+    /// Remove a partition by ID.
+    Despawn(String),
+}
+
 /// The compositor assembles and manages a set of partitions.
 ///
 /// It owns the bus, state machine, and double buffer. Each tick follows
-/// the three-phase lifecycle: swap buffers, step partitions, collect outputs.
+/// the three-phase lifecycle defined in FPA-014:
+/// - Phase 1: direct signal check, lifecycle ops, dump/load, buffer swap
+/// - Phase 2: step partitions with direct signal checks between each;
+///   shared context assembled after tick barrier
+/// - Phase 3: event evaluation, request processing, final signal check
 /// Fault handling wraps every partition call.
 pub struct Compositor {
     /// Unique identifier for this compositor instance.
@@ -64,6 +76,14 @@ pub struct Compositor {
     direct_signal_registry: DirectSignalRegistry,
     /// Direct signals emitted during operation (FPA-013).
     emitted_signals: Vec<DirectSignal>,
+    /// Pending lifecycle operations queued for Phase 1 processing (FPA-014).
+    pending_lifecycle_ops: Vec<LifecycleOp>,
+    /// Pending dump request flag for Phase 1 processing (FPA-014, FPA-023).
+    pending_dump: bool,
+    /// Last dump result produced during Phase 1 processing.
+    last_dump_result: Option<toml::Value>,
+    /// Pending load request for Phase 1 processing (FPA-014, FPA-023).
+    pending_load: Option<toml::Value>,
 }
 
 impl Compositor {
@@ -90,6 +110,10 @@ impl Compositor {
             pending_requests: Vec::new(),
             direct_signal_registry: DirectSignalRegistry::new(),
             emitted_signals: Vec::new(),
+            pending_lifecycle_ops: Vec::new(),
+            pending_dump: false,
+            last_dump_result: None,
+            pending_load: None,
         }
     }
 
@@ -318,12 +342,36 @@ impl Compositor {
         Ok(())
     }
 
-    /// Run one tick of the compositor lifecycle.
+    /// Queue a lifecycle operation for processing in the next tick's Phase 1 (FPA-014).
+    pub fn request_lifecycle_op(&mut self, op: LifecycleOp) {
+        self.pending_lifecycle_ops.push(op);
+    }
+
+    /// Queue a dump request for processing in the next tick's Phase 1 (FPA-014, FPA-023).
+    pub fn request_dump(&mut self) {
+        self.pending_dump = true;
+    }
+
+    /// Retrieve the last dump result produced during Phase 1 processing.
+    pub fn take_dump_result(&mut self) -> Option<toml::Value> {
+        self.last_dump_result.take()
+    }
+
+    /// Queue a load request for processing in the next tick's Phase 1 (FPA-014, FPA-023).
+    pub fn request_load(&mut self, fragment: toml::Value) {
+        self.pending_load = Some(fragment);
+    }
+
+    /// Run one tick of the compositor lifecycle (FPA-014).
     ///
-    /// Three phases:
-    /// 1. Swap buffers (write -> read, clear new write)
-    /// 2. Step each partition with fault handling
-    /// 3. Collect outputs via contribute_state
+    /// Three phases per tick:
+    /// - Phase 1: Check direct signals, process lifecycle ops, process
+    ///   dump/load requests, swap buffers
+    /// - Phase 2: Step each partition with fault handling; check direct
+    ///   signals between each partition step; assemble shared context
+    ///   after all partitions complete (tick barrier)
+    /// - Phase 3: Evaluate events against pre-step state, collect outputs,
+    ///   process bus requests, check direct signals
     pub fn run_tick(&mut self, dt: f64) -> Result<(), PartitionError> {
         if self.state_machine.state() != ExecutionState::Running {
             return Err(self.make_error(
@@ -336,13 +384,27 @@ impl Compositor {
             ));
         }
 
+        // === Phase 1: Pre-tick processing (FPA-014) ===
+        // Tick counters are incremented after Phase 1 so that dump requests
+        // produce snapshots with metadata matching the last completed tick.
+
+        // Step 1: Check for pending direct signals and process them.
+        self.collect_inner_signals();
+
+        // Step 2: Process pending lifecycle operations (spawn/despawn).
+        self.process_lifecycle_ops()?;
+
+        // Step 3: Process pending dump and load requests.
+        self.process_pending_dump_load()?;
+
+        // Advance tick counters now that Phase 1 is complete.
         self.tick_count += 1;
         self.elapsed_time += dt;
 
-        // Phase 1: swap buffers
+        // Step 4: Swap the read/write buffers.
         self.double_buffer.swap();
 
-        // Phase 2 & 3: step each partition and collect outputs.
+        // === Phase 2: Partition stepping (FPA-014) ===
         // For multi-rate partitions, each partition steps `rate` times per outer
         // tick with `dt / rate` per sub-step. If a partition faults mid-cycle and
         // a fallback is registered, the fallback completes the remaining sub-steps.
@@ -395,19 +457,16 @@ impl Compositor {
             };
             self.double_buffer.write(&partition_id, envelope.to_toml());
 
+            // Step 3: Check for pending direct signals between partition steps.
+            self.collect_inner_signals();
+
             i += 1;
         }
 
-        // Publish aggregated shared context on the bus.
-        // Collects all partition states from the write buffer into a single
-        // TOML table and publishes it as a SharedContext message.
-        //
-        // Design note (FPA-009 multi-rate): SharedContext is published once per
-        // outer tick, not after each sub-step. During multi-rate sub-stepping the
-        // double buffer write slot is overwritten, but a bus publication only
-        // occurs here — after all partitions have completed all their sub-steps.
-        // Publishing per sub-step would expose intermediate states that don't
-        // correspond to a consistent system snapshot.
+        // Assemble shared context from current tick's partition outputs
+        // and publish on the bus (FPA-014: after the tick barrier, before
+        // Phase 3). SharedContext reflects the complete, consistent state
+        // of all partitions after stepping.
         {
             let mut table = toml::map::Map::new();
             for (id, value) in self.double_buffer.write_all() {
@@ -416,10 +475,13 @@ impl Compositor {
             self.bus.publish(SharedContext {
                 state: toml::Value::Table(table),
                 tick: self.tick_count,
+                execution_state: self.state_machine.state(),
             });
         }
 
-        // Phase 3: evaluate events against pre-step state (snapshot semantics)
+        // === Phase 3: Post-tick processing (FPA-014) ===
+
+        // Step 1: Evaluate events against pre-step state (snapshot semantics).
         // The read buffer contains the previous tick's state (set during Phase 1 swap),
         // which is the pre-step snapshot. Events are evaluated against this snapshot
         // so that event conditions see a consistent, pre-mutation view.
@@ -434,7 +496,10 @@ impl Compositor {
                 .collect();
         }
 
-        // Collect direct signals from any inner compositor partitions (FPA-013).
+        // Steps 2-4: Collect outputs, process bus requests, relay qualified requests.
+        // (Outputs collected during Phase 2 loop above; relay via drain_relayed_requests.)
+
+        // Step 5: Check for pending direct signals.
         self.collect_inner_signals();
 
         Ok(())
@@ -477,6 +542,30 @@ impl Compositor {
         Ok(())
     }
 
+    /// Pause the compositor. Transitions Running -> Paused.
+    ///
+    /// Load operations require the compositor to be in Paused state (FPA-023).
+    pub fn pause(&mut self) -> Result<(), PartitionError> {
+        self.state_machine
+            .request_transition(TransitionRequest {
+                requested_by: "compositor".to_string(),
+                target_state: ExecutionState::Paused,
+            })
+            .map_err(|e| self.make_error("compositor", "pause", e.to_string()))?;
+        Ok(())
+    }
+
+    /// Resume the compositor. Transitions Paused -> Running.
+    pub fn resume(&mut self) -> Result<(), PartitionError> {
+        self.state_machine
+            .request_transition(TransitionRequest {
+                requested_by: "compositor".to_string(),
+                target_state: ExecutionState::Running,
+            })
+            .map_err(|e| self.make_error("compositor", "resume", e.to_string()))?;
+        Ok(())
+    }
+
     /// Process a transition request (e.g., received via bus).
     pub fn process_transition_request(
         &mut self,
@@ -506,6 +595,92 @@ impl Compositor {
     fn make_error(&self, partition_id: &str, operation: &str, message: String) -> PartitionError {
         PartitionError::new(partition_id, operation, message)
             .with_layer_depth(self.layer_depth)
+    }
+
+    /// Process pending lifecycle operations (FPA-014 Phase 1 step 2).
+    ///
+    /// Spawned partitions are initialized and added. Despawned partitions are
+    /// shut down and removed.
+    fn process_lifecycle_ops(&mut self) -> Result<(), PartitionError> {
+        let ops = std::mem::take(&mut self.pending_lifecycle_ops);
+        for op in ops {
+            match op {
+                LifecycleOp::Spawn(mut partition) => {
+                    let result = fault::safe_init(partition.as_mut());
+                    if let Err(e) = result.into_result() {
+                        self.state_machine.force_state(ExecutionState::Error);
+                        return Err(e.with_layer_depth(self.layer_depth));
+                    }
+                    self.partitions.push(partition);
+                }
+                LifecycleOp::Despawn(id) => {
+                    if let Some(pos) = self.partitions.iter().position(|p| p.id() == id) {
+                        let mut removed = self.partitions.remove(pos);
+                        // Shutdown error is intentionally discarded: the partition
+                        // is being removed regardless, similar to Drop semantics.
+                        // A failing shutdown should not prevent despawn or poison
+                        // the compositor — the partition is already gone from the
+                        // active set by this point.
+                        let _ = fault::safe_shutdown(removed.as_mut());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Process pending dump and load requests (FPA-014 Phase 1 step 3, FPA-023).
+    ///
+    /// Dump invokes `contribute_state()` on all partitions using post-tick-N-1
+    /// state. Load replaces partition state via `load_state()`.
+    fn process_pending_dump_load(&mut self) -> Result<(), PartitionError> {
+        if self.pending_dump {
+            self.pending_dump = false;
+            self.last_dump_result = Some(self.dump()?);
+        }
+        if let Some(fragment) = self.pending_load.take() {
+            self.apply_state_fragment(fragment)?;
+        }
+        Ok(())
+    }
+
+    /// Apply a state fragment to partitions and system counters.
+    ///
+    /// Shared implementation used by both `load()` (external API with state
+    /// guard) and `process_pending_dump_load()` (Phase 1 internal path, which
+    /// is already at an idle tick boundary by construction).
+    fn apply_state_fragment(&mut self, fragment: toml::Value) -> Result<(), PartitionError> {
+        if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
+            for partition in &mut self.partitions {
+                if let Some(envelope_value) = partitions.get(partition.id()) {
+                    let state = if let Some(sc) = StateContribution::from_toml(envelope_value) {
+                        sc.state
+                    } else {
+                        envelope_value.clone()
+                    };
+                    fault::safe_load_state(partition.as_mut(), state)
+                        .into_result()
+                        .map_err(|e| e.with_layer_depth(self.layer_depth))?;
+
+                    // Seed the write buffer with the loaded envelope so the
+                    // next swap makes the loaded snapshot visible as the
+                    // pre-step read buffer for event evaluation and signals.
+                    self.double_buffer
+                        .write(&partition.id().to_string(), envelope_value.clone());
+                }
+            }
+        }
+        if let Some(system) = fragment.get("system").and_then(|v| v.as_table()) {
+            if let Some(tc) = system.get("tick_count").and_then(|v| v.as_integer()) {
+                self.tick_count = u64::try_from(tc).map_err(|_| {
+                    self.make_error("compositor", "load", "tick_count is negative".to_string())
+                })?;
+            }
+            if let Some(et) = system.get("elapsed_time").and_then(|v| v.as_float()) {
+                self.elapsed_time = et;
+            }
+        }
+        Ok(())
     }
 
     /// Collect direct signals from inner compositor partitions (FPA-013).
@@ -590,53 +765,33 @@ impl Compositor {
             "elapsed_time".to_string(),
             toml::Value::Float(self.elapsed_time),
         );
+        system.insert(
+            "execution_state".to_string(),
+            toml::Value::String(self.state_machine.state().to_string()),
+        );
         root.insert("system".to_string(), toml::Value::Table(system));
         Ok(toml::Value::Table(root))
     }
 
     /// Load state from a TOML composition fragment (FPA-022, FPA-023).
     ///
-    /// Load is only valid when no lifecycle calls are in flight (FPA-023 idle
-    /// precondition). In a single-threaded compositor, the transitional states
-    /// (Initializing, ShuttingDown) indicate lifecycle calls are in progress.
+    /// Load is only valid when processing is idle (FPA-023): no partition
+    /// lifecycle methods are in flight AND the execution state machine is in a
+    /// non-processing state (Paused or Uninitialized).
     pub fn load(&mut self, fragment: toml::Value) -> Result<(), PartitionError> {
         let state = self.state_machine.state();
-        if state == ExecutionState::Initializing || state == ExecutionState::ShuttingDown {
+        if state != ExecutionState::Paused && state != ExecutionState::Uninitialized {
             return Err(self.make_error(
                 "compositor",
                 "load",
-                format!("load is not valid while compositor is in {} state (lifecycle calls in flight)", state),
+                format!(
+                    "load requires Paused or Uninitialized state (FPA-023), but compositor is in {} state",
+                    state
+                ),
             ));
         }
 
-        // Extract partitions section
-        if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
-            for partition in &mut self.partitions {
-                if let Some(envelope_value) = partitions.get(partition.id()) {
-                    // Unwrap StateContribution envelope to get the inner state
-                    let state = if let Some(sc) = StateContribution::from_toml(envelope_value) {
-                        sc.state
-                    } else {
-                        envelope_value.clone()
-                    };
-                    fault::safe_load_state(partition.as_mut(), state)
-                        .into_result()
-                        .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-                }
-            }
-        }
-        // Restore system state
-        if let Some(system) = fragment.get("system").and_then(|v| v.as_table()) {
-            if let Some(tc) = system.get("tick_count").and_then(|v| v.as_integer()) {
-                self.tick_count = u64::try_from(tc).map_err(|_| {
-                    self.make_error("compositor", "load", "tick_count is negative".to_string())
-                })?;
-            }
-            if let Some(et) = system.get("elapsed_time").and_then(|v| v.as_float()) {
-                self.elapsed_time = et;
-            }
-        }
-        Ok(())
+        self.apply_state_fragment(fragment)
     }
 }
 
@@ -666,7 +821,18 @@ impl Partition for Compositor {
     }
 
     fn load_state(&mut self, state: toml::Value) -> Result<(), PartitionError> {
-        self.load(state)
+        // When called as a nested partition, the outer compositor is responsible
+        // for ensuring idle state.  Automatically pause/resume so the inner
+        // compositor's load() precondition (Paused) is satisfied.
+        let was_running = self.state_machine.state() == ExecutionState::Running;
+        if was_running {
+            self.pause()?;
+        }
+        let result = self.load(state);
+        if was_running {
+            self.resume()?;
+        }
+        result
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {

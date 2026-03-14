@@ -94,8 +94,7 @@ fn condition_triggered_event_fires_on_partition_output() {
     let events = vec![EventDefinition {
         id: "count_check".to_string(),
         trigger: EventTrigger::Condition {
-            signal: "counter.count".to_string(),
-            predicate: Predicate::GreaterThan(1.0),
+            predicate: Predicate::GreaterThan { signal: "counter.count".to_string(), threshold: 1.0 },
         },
         action: EventAction {
             action_id: "threshold_reached".to_string(),
@@ -144,8 +143,7 @@ fn events_evaluated_against_pre_step_state() {
     let events = vec![EventDefinition {
         id: "snapshot_check".to_string(),
         trigger: EventTrigger::Condition {
-            signal: "counter.count".to_string(),
-            predicate: Predicate::Equal(1.0),
+            predicate: Predicate::Equal { signal: "counter.count".to_string(), threshold: 1.0 },
         },
         action: EventAction {
             action_id: "snapshot_action".to_string(),

@@ -87,16 +87,8 @@ recursively.
 3. Process pending dump and load requests (FPA-023). Dump invokes
    `contribute_state()` on all partitions using post-tick-N-1 state. Load replaces
    partition state via `load_state()`.
-4. Assemble shared context from tick N-1 partition outputs and publish it on the bus
-   into the **current write buffer**.
-5. Publish execution state and shared context on the bus into the **current write
-   buffer** — this is the buffer that will become the read buffer for tick N after
-   the swap in step 6 and will be visible to all partitions during Phase 2.
-   Execution state and shared context are thus stable and readable by all
-   partitions throughout Phase 2 of tick N.
-6. Swap the read/write buffers: the **new read buffer** (the buffer that was the
-   write buffer prior to this step) now contains tick N-1 partition outputs plus the
-   shared context and execution state published in steps 4-5; the **new
+4. Swap the read/write buffers: the **new read buffer** (the buffer that was the
+   write buffer prior to this step) now contains tick N-1 partition outputs; the **new
    write buffer** (the buffer that was the read buffer prior to this step) is cleared
    to receive tick N outputs.
 
@@ -131,10 +123,18 @@ invariants:
 - **Request collection:** Bus requests (e.g., execution state transition requests)
   emitted by concurrently stepping partitions shall be collected in a thread-safe manner
   for arbitration in Phase 3.
-- **Tick barrier:** All partition `step()` calls shall complete before Phase 3 begins.
+- **Tick barrier:** All partition `step()` calls shall complete before shared context
+  assembly or Phase 3 begins.
 - **Determinism:** The result shall be identical to that produced by sequential
   stepping in any order — the double-buffered approach guarantees this provided the
   invariants above are upheld.
+
+After all partition `step()` calls complete (the tick barrier), the compositor assembles
+shared context from the current tick's partition outputs (the write buffer) and publishes
+it on the bus along with the current execution state. Shared context thus reflects the
+complete, consistent state of all partitions after tick N — no partition's output is
+missing or partial. Partitions do not read shared context during Phase 2; it is available
+on the bus for external consumers and for the compositor's own Phase 3 event evaluation.
 
 **Phase 3 — Post-tick processing:**
 

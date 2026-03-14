@@ -73,6 +73,36 @@ fn snapshot_has_composition_fragment_structure() {
     assert!(system.contains_key("tick_count"));
 }
 
+/// Snapshot includes current time and execution state metadata (FPA-022).
+#[test]
+fn snapshot_contains_time_and_execution_state() {
+    let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(Counter::new("a")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    compositor.init().unwrap();
+    compositor.run_tick(0.5).unwrap();
+    compositor.run_tick(0.5).unwrap();
+    compositor.run_tick(1.0).unwrap();
+
+    let snapshot = compositor.dump().unwrap();
+    let system = snapshot.get("system").unwrap().as_table().unwrap();
+
+    // Must include elapsed_time (cumulative dt)
+    let elapsed = system.get("elapsed_time").unwrap().as_float().unwrap();
+    assert!(
+        (elapsed - 2.0).abs() < 1e-9,
+        "elapsed_time should be 2.0 (0.5 + 0.5 + 1.0), got {}",
+        elapsed
+    );
+
+    // Must include execution_state
+    let exec_state = system.get("execution_state").unwrap().as_str().unwrap();
+    assert_eq!(exec_state, "Running");
+}
+
 /// A fragment extending a snapshot can override a partition's state.
 #[test]
 fn snapshot_with_extends_override() {
@@ -113,7 +143,9 @@ fn snapshot_with_extends_override() {
     let bus2 = InProcessBus::new("test-bus-2");
     let mut compositor2 = Compositor::new(partitions2, Box::new(bus2));
     compositor2.init().unwrap();
+    compositor2.pause().unwrap();
     compositor2.load(merged).unwrap();
+    compositor2.resume().unwrap();
 
     // The override should have won: counter at 42, not 5
     let state2 = compositor2.dump().unwrap();

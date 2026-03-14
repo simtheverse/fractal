@@ -33,9 +33,7 @@ impl EventEngine {
             .filter(|ev| ev.armed)
             .filter(|ev| match &ev.trigger {
                 EventTrigger::Time { at } => current_time >= *at,
-                EventTrigger::Condition { signal, predicate } => {
-                    signals.get(signal).map_or(false, |v| predicate.evaluate(*v))
-                }
+                EventTrigger::Condition { predicate } => predicate.evaluate(signals),
             })
             .map(|ev| &ev.action)
             .collect()

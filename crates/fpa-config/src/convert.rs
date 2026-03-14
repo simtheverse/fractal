@@ -3,15 +3,15 @@
 use crate::fragment::{EventConfig, TriggerConfig};
 use fpa_events::{EventAction, EventDefinition, EventTrigger, Predicate};
 
-/// Parse a predicate string and value into a [`Predicate`].
+/// Parse a predicate string and value into a [`Predicate`] for a given signal.
 ///
 /// Supported operators: `">"` / `"greater_than"`, `"<"` / `"less_than"`,
 /// `"=="` / `"equal"`.
-fn parse_predicate(predicate: &str, value: f64) -> Result<Predicate, String> {
+fn parse_predicate(signal: &str, predicate: &str, value: f64) -> Result<Predicate, String> {
     match predicate {
-        ">" | "greater_than" => Ok(Predicate::GreaterThan(value)),
-        "<" | "less_than" => Ok(Predicate::LessThan(value)),
-        "==" | "equal" => Ok(Predicate::Equal(value)),
+        ">" | "greater_than" => Ok(Predicate::GreaterThan { signal: signal.to_string(), threshold: value }),
+        "<" | "less_than" => Ok(Predicate::LessThan { signal: signal.to_string(), threshold: value }),
+        "==" | "equal" => Ok(Predicate::Equal { signal: signal.to_string(), threshold: value }),
         other => Err(format!("unknown predicate operator: '{}'", other)),
     }
 }
@@ -27,8 +27,7 @@ impl TryFrom<&EventConfig> for EventDefinition {
                 predicate,
                 value,
             } => EventTrigger::Condition {
-                signal: signal.clone(),
-                predicate: parse_predicate(predicate, *value)?,
+                predicate: parse_predicate(signal, predicate, *value)?,
             },
         };
 
