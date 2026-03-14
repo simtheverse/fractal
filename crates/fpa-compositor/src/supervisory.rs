@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use fpa_bus::{Bus, BusExt, InProcessBus};
 use fpa_contract::{Partition, PartitionError, SharedContext, StateContribution};
+use crate::direct_signal::DirectSignal;
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 
 /// An entry in the output store with freshness tracking.
@@ -56,6 +57,9 @@ pub struct SupervisoryCompositor {
     partition_intervals: HashMap<String, Duration>,
     /// Tick counter for run_tick.
     tick_count: u64,
+    /// Direct signals collected from inner compositor partitions (FPA-013).
+    /// Shared with spawned tasks so signals propagate through supervisory nesting.
+    emitted_signals: Arc<Mutex<Vec<DirectSignal>>>,
 }
 
 impl SupervisoryCompositor {
@@ -85,6 +89,7 @@ impl SupervisoryCompositor {
             step_interval: Duration::from_millis(10),
             partition_intervals: HashMap::new(),
             tick_count: 0,
+            emitted_signals: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -157,6 +162,7 @@ impl SupervisoryCompositor {
         for mut partition in partitions {
             let partition_id = partition.id().to_string();
             let store = Arc::clone(&self.output_store);
+            let signals = Arc::clone(&self.emitted_signals);
             let step_interval = self
                 .partition_intervals
                 .get(&partition_id)
@@ -226,6 +232,17 @@ impl SupervisoryCompositor {
                         break;
                     }
                     tick += 1;
+
+                    // Collect direct signals from inner compositor partitions (FPA-013)
+                    if let Some(any) = partition.as_any_mut() {
+                        use crate::compositor::Compositor;
+                        if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
+                            let drained = inner_comp.drain_emitted_signals();
+                            if !drained.is_empty() {
+                                signals.lock().unwrap().extend(drained);
+                            }
+                        }
+                    }
 
                     // Contribute state
                     if let Ok(value) = partition.contribute_state() {
@@ -401,6 +418,14 @@ impl SupervisoryCompositor {
         Ok(toml::Value::Table(table))
     }
 
+    /// Drain and return all direct signals collected from inner compositor
+    /// partitions (FPA-013). Signals accumulate in the shared store as spawned
+    /// tasks step their partitions; this method transfers them out for
+    /// propagation to the outer layer.
+    pub fn drain_emitted_signals(&mut self) -> Vec<DirectSignal> {
+        std::mem::take(&mut *self.emitted_signals.lock().unwrap())
+    }
+
     fn make_error(&self, partition_id: &str, operation: &str, message: String) -> PartitionError {
         PartitionError::new(partition_id, operation, message).with_layer_depth(self.layer_depth)
     }
@@ -486,5 +511,9 @@ impl Partition for SupervisoryCompositor {
             }
         }
         Ok(())
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }

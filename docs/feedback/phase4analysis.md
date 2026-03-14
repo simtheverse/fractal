@@ -317,7 +317,7 @@ implementation in `SupervisoryCompositor` now sends shutdown signals and polls
 called from within a tokio runtime context. Post-shutdown sleep hacks removed from
 cross-strategy tests (`fpa_009_cross_strategy.rs`).
 
-### F6. Compositional property tests are structural, not behavioral (FPA-037)
+### F6. Compositional property tests are structural, not behavioral (FPA-037) — ACCEPTED
 
 **Spec text (FPA-037):** "Compositor tests assert compositional properties (delivery,
 conservation, ordering); don't fail when partition impl swapped."
@@ -346,11 +346,19 @@ domain-specific contract tests (FPA-032, FPA-036) and are outside FPA-037's scop
 This is arguably already implied, but making it explicit would prevent confusion about
 what "compositional properties" means.
 
+**Disposition (2026-03-13):** Accepted as working-as-intended. The spec already draws
+this line implicitly: FPA-037 tests the compositor's framework guarantees (delivery,
+conservation, ordering), while FPA-032/FPA-036 tests verify implementation-specific
+behavioral properties through contract tests. The compositor doesn't know or care what
+a partition computes — only that it participates correctly in the lifecycle. Structural
+properties are the right level for compositor tests; behavioral properties belong to
+contract tests. No spec change needed.
+
 ---
 
 ## Minor Observations
 
-### M1. Per-crate Diataxis structure incomplete (FPA-030)
+### M1. Per-crate Diataxis structure incomplete (FPA-030) — DEFERRED
 
 Per-crate `docs/` directories use flat `docs/SPECIFICATION.md` rather than
 `docs/design/SPECIFICATION.md`. The `tutorials/`, `how-to/`, `reference/`
@@ -358,21 +366,30 @@ subdirectories are empty. Existing feedback file `docs/feedback/FPA-030.md` cove
 this. The fpa_030 tests accommodate the flat structure and report subdirectory gaps
 without failing.
 
-### M2. `Box<dyn Bus>` is not `Send` (FPA-004)
+**Disposition (2026-03-13):** Deferred to Phase 7 (Documentation & Packaging).
+
+### M2. `Box<dyn Bus>` is not `Send` (FPA-004) — ACCEPTED
 
 The `Bus` trait does not require `Send`. This means `Box<dyn Bus>` is not `Send`, and
 compositors holding one are not `Send`. The prototype runs on a single-threaded tokio
 runtime so this doesn't matter, but a production multi-threaded deployment would need
 `Bus: Send + Sync` or thread-local bus handles.
 
-### M3. Phase 1 task 1C.4 remains skipped
+**Disposition (2026-03-13):** Accepted. The prototype's single-threaded runtime makes
+this a non-issue. A production deployment would add `Send + Sync` bounds to the `Bus`
+trait, which is a straightforward change.
+
+### M3. Phase 1 task 1C.4 remains skipped — ACCEPTED
 
 The property test "run 100 ticks with random step orders → identical final state" was
 never implemented. Phase 4's cross-strategy and multi-transport work makes determinism
 testing more relevant, not less. This gap should be addressed in Phase 6 (Track Q:
 Determinism Evaluation).
 
-### M4. `collect_inner_signals` only handles `Compositor`, not `SupervisoryCompositor`
+**Disposition (2026-03-13):** Accepted. Already tracked for Phase 6 (Track Q:
+Determinism Evaluation).
+
+### M4. `collect_inner_signals` only handles `Compositor`, not `SupervisoryCompositor` — RESOLVED
 
 In `compositor.rs` lines 507–516, `collect_inner_signals()` downcasts inner partitions
 to `Compositor` to drain direct signals. It does not attempt to downcast to
@@ -380,3 +397,10 @@ to `Compositor` to drain direct signals. It does not attempt to downcast to
 not propagate to the outer layer. This is a minor gap since direct signals are
 safety-critical and the supervisory compositor doesn't currently support them, but the
 spec's FPA-013 doesn't restrict direct signals to lock-step compositors.
+
+**Resolution (2026-03-13):** Resolved. Added `emitted_signals: Arc<Mutex<Vec<DirectSignal>>>`
+to `SupervisoryCompositor`, shared with spawned partition tasks. After each step, tasks
+collect direct signals from inner compositors (via `as_any_mut` downcast to `Compositor`)
+and write them to the shared signal store. Added `drain_emitted_signals()` method and
+`as_any_mut()` override. Updated `collect_inner_signals()` in `Compositor` to also
+downcast to `SupervisoryCompositor`.

@@ -543,6 +543,7 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 - [ ] **7.2** Final spec feedback pass — most feedback addressed in Phase 3b; review any remaining items from Phases 4–6
 - [ ] **7.3** List open questions and areas for further prototyping
 - [ ] **7.4** Architecture decision records for any spec changes surfaced during prototyping
+- [ ] **7.5** Complete per-crate Diataxis documentation structure (`docs/design/`, `docs/tutorials/`, `docs/how-to/`, `docs/reference/`) — deferred from Phase 4 M1
 
 ---
 

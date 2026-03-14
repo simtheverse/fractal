@@ -189,6 +189,11 @@ impl Compositor {
         self.emitted_signals.clear();
     }
 
+    /// Drain and return all emitted direct signals, leaving the internal list empty.
+    pub fn drain_emitted_signals(&mut self) -> Vec<DirectSignal> {
+        std::mem::take(&mut self.emitted_signals)
+    }
+
     /// Submit a transition request from an inner partition (FPA-010).
     ///
     /// The request is subject to the compositor's relay policy before
@@ -514,6 +519,9 @@ impl Compositor {
             if let Some(any) = partition.as_any_mut() {
                 if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
                     let signals = std::mem::take(&mut inner_comp.emitted_signals);
+                    self.emitted_signals.extend(signals);
+                } else if let Some(inner_sup) = any.downcast_mut::<crate::supervisory::SupervisoryCompositor>() {
+                    let signals = inner_sup.drain_emitted_signals();
                     self.emitted_signals.extend(signals);
                 }
             }
