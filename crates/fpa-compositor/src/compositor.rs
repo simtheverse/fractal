@@ -43,8 +43,9 @@ pub enum LifecycleOp {
 ///
 /// It owns the bus, state machine, and double buffer. Each tick follows
 /// the three-phase lifecycle defined in FPA-014:
-/// - Phase 1: direct signal check, lifecycle ops, dump/load, shared context, buffer swap
-/// - Phase 2: step partitions with direct signal checks between each
+/// - Phase 1: direct signal check, lifecycle ops, dump/load, buffer swap
+/// - Phase 2: step partitions with direct signal checks between each;
+///   shared context assembled after tick barrier
 /// - Phase 3: event evaluation, request processing, final signal check
 /// Fault handling wraps every partition call.
 pub struct Compositor {
@@ -365,9 +366,10 @@ impl Compositor {
     ///
     /// Three phases per tick:
     /// - Phase 1: Check direct signals, process lifecycle ops, process
-    ///   dump/load requests, assemble shared context, swap buffers
+    ///   dump/load requests, swap buffers
     /// - Phase 2: Step each partition with fault handling; check direct
-    ///   signals between each partition step
+    ///   signals between each partition step; assemble shared context
+    ///   after all partitions complete (tick barrier)
     /// - Phase 3: Evaluate events against pre-step state, collect outputs,
     ///   process bus requests, check direct signals
     pub fn run_tick(&mut self, dt: f64) -> Result<(), PartitionError> {
@@ -659,6 +661,12 @@ impl Compositor {
                     fault::safe_load_state(partition.as_mut(), state)
                         .into_result()
                         .map_err(|e| e.with_layer_depth(self.layer_depth))?;
+
+                    // Seed the write buffer with the loaded envelope so the
+                    // next swap makes the loaded snapshot visible as the
+                    // pre-step read buffer for event evaluation and signals.
+                    self.double_buffer
+                        .write(&partition.id().to_string(), envelope_value.clone());
                 }
             }
         }
