@@ -678,7 +678,7 @@ async fn panic_during_supervisory_step_is_caught() {
 }
 
 /// FPA-011: A partition panicking during init() in a supervisory task should be
-/// caught and reported — not crash the task silently.
+/// caught and returned from the compositor's own init() call.
 #[tokio::test]
 async fn panic_during_supervisory_init_is_caught() {
     let bus = InProcessBus::new("test-bus");
@@ -695,27 +695,25 @@ async fn panic_during_supervisory_init_is_caught() {
     )
     .with_step_interval(Duration::from_millis(5));
 
-    compositor.init().unwrap();
+    // Init should return the panic as an error from its own call (FPA-011)
+    let result = compositor.init();
+    assert!(result.is_err(), "init should return error when partition panics");
 
-    // Wait for the init panic to be caught and reported
-    wait_for_output(compositor.output_store(), "panicker", Duration::from_secs(2)).await;
-
-    let store = compositor.output_store().lock().unwrap();
-    let entry = store.get("panicker").expect("should have error entry");
-    match &entry.output {
-        PartitionOutput::Fault { operation, message } => {
-            assert!(
-                message.contains("panic"),
-                "error message should mention panic: {}",
-                message
-            );
-            assert_eq!(
-                operation, "init",
-                "error should identify init as the faulting operation"
-            );
-        }
-        PartitionOutput::State(_) => panic!("expected fault, got state"),
-    }
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("panic"),
+        "error message should mention panic: {}",
+        err.message
+    );
+    assert_eq!(
+        err.operation, "init",
+        "error should identify init as the faulting operation"
+    );
+    assert_eq!(
+        compositor.state(),
+        fpa_compositor::state_machine::ExecutionState::Error,
+        "compositor should be in Error state after init fault"
+    );
 }
 
 /// FPA-011: A partition whose step() exceeds the 50ms timeout should be
@@ -757,7 +755,7 @@ async fn slow_supervisory_step_detected_as_timeout() {
 }
 
 /// FPA-011: A partition whose init() exceeds the 500ms timeout should be
-/// reported as a timeout fault in the supervisory output store.
+/// returned as a fault from the compositor's own init() call.
 #[tokio::test]
 async fn slow_supervisory_init_detected_as_timeout() {
     let bus = InProcessBus::new("test-bus");
@@ -775,23 +773,23 @@ async fn slow_supervisory_init_detected_as_timeout() {
     )
     .with_step_interval(Duration::from_millis(5));
 
-    compositor.init().unwrap();
+    // Init should return the timeout as an error from its own call (FPA-011).
+    // The error may come from safe_init's internal timeout detection or from
+    // the compositor's recv_timeout deadline — both are valid.
+    let result = compositor.init();
+    assert!(result.is_err(), "init should return error when partition times out");
 
-    // Wait for the timeout to be detected and reported
-    wait_for_output(compositor.output_store(), "slowpoke", Duration::from_secs(2)).await;
-
-    let store = compositor.output_store().lock().unwrap();
-    let entry = store.get("slowpoke").expect("should have entry");
-    match &entry.output {
-        PartitionOutput::Fault { message, .. } => {
-            assert!(
-                message.contains("timeout") || message.contains("exceeded"),
-                "error message should mention timeout: {}",
-                message
-            );
-        }
-        PartitionOutput::State(_) => panic!("expected timeout fault, got state"),
-    }
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("timeout") || err.message.contains("exceeded") || err.message.contains("deadline"),
+        "error message should mention timeout: {}",
+        err.message
+    );
+    assert_eq!(
+        compositor.state(),
+        fpa_compositor::state_machine::ExecutionState::Error,
+        "compositor should be in Error state after init timeout"
+    );
 }
 
 /// FPA-011: Error context from supervisory tasks should include the partition

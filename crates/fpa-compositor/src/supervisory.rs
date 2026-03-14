@@ -175,18 +175,16 @@ impl SupervisoryCompositor {
 
     /// Initialize the supervisory compositor: spawn each partition as a task.
     ///
-    /// Each partition is moved into its own tokio task that runs:
-    /// 1. `partition.init()`
-    /// 2. Loop: `partition.step(dt)`, `partition.contribute_state()`, write to store
-    /// 3. On shutdown signal: `partition.shutdown()`
+    /// Initialization runs on OS threads (not tokio tasks) so the init phase
+    /// completes synchronously regardless of the tokio runtime flavor. Each
+    /// partition's `init()` is routed through `fault::safe_init()` for panic
+    /// catching and 500ms timeout enforcement (FPA-011). If any partition
+    /// faults during init, this method transitions to Error and returns the
+    /// fault — satisfying FPA-011's requirement that init faults propagate
+    /// "from the compositor's own `init()` call."
     ///
-    /// **Spec finding (FPA-011 vs FPA-009):** The spec requires init faults to
-    /// be propagated "from the compositor's own `init()` call." Under supervisory
-    /// coordination, partition init runs asynchronously in spawned tasks — the
-    /// compositor cannot observe the fault synchronously. Init faults are recorded
-    /// in the output store and propagated on the next `run_tick()` / `step()` /
-    /// `contribute_state()` call. This is an inherent tension between FPA-011's
-    /// synchronous fault model and FPA-009's asynchronous task model.
+    /// After all partitions initialize successfully, tokio tasks are spawned
+    /// for the step/contribute_state loop.
     pub fn init(&mut self) -> Result<(), PartitionError> {
         self.state_machine
             .request_transition(TransitionRequest {
@@ -197,7 +195,48 @@ impl SupervisoryCompositor {
 
         let partitions = std::mem::take(&mut self.pending_partitions);
 
+        // Phase 1: Initialize all partitions on OS threads (not tokio tasks)
+        // so we can wait synchronously without blocking the tokio runtime.
+        type InitResult = Result<Box<dyn Partition>, (String, PartitionError)>;
+        let (tx, rx) = std::sync::mpsc::channel::<InitResult>();
+
+        let partition_count = partitions.len();
         for mut partition in partitions {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let id = partition.id().to_string();
+                match fault::safe_init(partition.as_mut()).into_result() {
+                    Ok(()) => { let _ = tx.send(Ok(partition)); }
+                    Err(e) => { let _ = tx.send(Err((id, e))); }
+                }
+            });
+        }
+        drop(tx);
+
+        let mut initialized: Vec<Box<dyn Partition>> = Vec::with_capacity(partition_count);
+        let deadline = Instant::now() + fault::INIT_TIMEOUT;
+
+        for _ in 0..partition_count {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(Ok(partition)) => initialized.push(partition),
+                Ok(Err((id, e))) => {
+                    self.state_machine.force_state(ExecutionState::Error);
+                    return Err(self.make_error(&id, &e.operation, e.message));
+                }
+                Err(_) => {
+                    self.state_machine.force_state(ExecutionState::Error);
+                    return Err(self.make_error(
+                        "compositor",
+                        "init",
+                        "partition(s) did not complete init within deadline".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Phase 2: All partitions initialized — spawn tokio tasks for step loops.
+        for mut partition in initialized {
             let partition_id = partition.id().to_string();
             let store = Arc::clone(&self.output_store);
             let signals = Arc::clone(&self.emitted_signals);
@@ -209,24 +248,6 @@ impl SupervisoryCompositor {
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let join_handle = tokio::spawn(async move {
-                // Initialize — routed through fault wrapper for panic catching
-                // and timeout enforcement (FPA-011).
-                if let Err(e) = fault::safe_init(partition.as_mut()).into_result() {
-                    let mut s = store.lock().unwrap();
-                    s.insert(
-                        partition.id().to_string(),
-                        FreshnessEntry {
-                            output: PartitionOutput::Fault {
-                                operation: "init".to_string(),
-                                message: e.message.clone(),
-                            },
-                            updated_at: Instant::now(),
-                            tick: 0,
-                        },
-                    );
-                    return;
-                }
-
                 let mut tick: u64 = 0;
                 let dt = step_interval.as_secs_f64();
 
