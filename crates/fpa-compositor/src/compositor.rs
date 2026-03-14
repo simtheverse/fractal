@@ -382,10 +382,9 @@ impl Compositor {
             ));
         }
 
-        self.tick_count += 1;
-        self.elapsed_time += dt;
-
         // === Phase 1: Pre-tick processing (FPA-014) ===
+        // Tick counters are incremented after Phase 1 so that dump requests
+        // produce snapshots with metadata matching the last completed tick.
 
         // Step 1: Check for pending direct signals and process them.
         self.collect_inner_signals();
@@ -395,6 +394,10 @@ impl Compositor {
 
         // Step 3: Process pending dump and load requests.
         self.process_pending_dump_load()?;
+
+        // Advance tick counters now that Phase 1 is complete.
+        self.tick_count += 1;
+        self.elapsed_time += dt;
 
         // Step 4: Swap the read/write buffers.
         self.double_buffer.swap();
@@ -611,6 +614,11 @@ impl Compositor {
                 LifecycleOp::Despawn(id) => {
                     if let Some(pos) = self.partitions.iter().position(|p| p.id() == id) {
                         let mut removed = self.partitions.remove(pos);
+                        // Shutdown error is intentionally discarded: the partition
+                        // is being removed regardless, similar to Drop semantics.
+                        // A failing shutdown should not prevent despawn or poison
+                        // the compositor — the partition is already gone from the
+                        // active set by this point.
                         let _ = fault::safe_shutdown(removed.as_mut());
                     }
                 }
@@ -629,31 +637,39 @@ impl Compositor {
             self.last_dump_result = Some(self.dump()?);
         }
         if let Some(fragment) = self.pending_load.take() {
-            // Load state into partitions directly (we are already idle at a
-            // tick boundary — no step() is in flight).
-            if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
-                for partition in &mut self.partitions {
-                    if let Some(envelope_value) = partitions.get(partition.id()) {
-                        let state = if let Some(sc) = StateContribution::from_toml(envelope_value) {
-                            sc.state
-                        } else {
-                            envelope_value.clone()
-                        };
-                        fault::safe_load_state(partition.as_mut(), state)
-                            .into_result()
-                            .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-                    }
+            self.apply_state_fragment(fragment)?;
+        }
+        Ok(())
+    }
+
+    /// Apply a state fragment to partitions and system counters.
+    ///
+    /// Shared implementation used by both `load()` (external API with state
+    /// guard) and `process_pending_dump_load()` (Phase 1 internal path, which
+    /// is already at an idle tick boundary by construction).
+    fn apply_state_fragment(&mut self, fragment: toml::Value) -> Result<(), PartitionError> {
+        if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
+            for partition in &mut self.partitions {
+                if let Some(envelope_value) = partitions.get(partition.id()) {
+                    let state = if let Some(sc) = StateContribution::from_toml(envelope_value) {
+                        sc.state
+                    } else {
+                        envelope_value.clone()
+                    };
+                    fault::safe_load_state(partition.as_mut(), state)
+                        .into_result()
+                        .map_err(|e| e.with_layer_depth(self.layer_depth))?;
                 }
             }
-            if let Some(system) = fragment.get("system").and_then(|v| v.as_table()) {
-                if let Some(tc) = system.get("tick_count").and_then(|v| v.as_integer()) {
-                    if let Ok(tc) = u64::try_from(tc) {
-                        self.tick_count = tc;
-                    }
-                }
-                if let Some(et) = system.get("elapsed_time").and_then(|v| v.as_float()) {
-                    self.elapsed_time = et;
-                }
+        }
+        if let Some(system) = fragment.get("system").and_then(|v| v.as_table()) {
+            if let Some(tc) = system.get("tick_count").and_then(|v| v.as_integer()) {
+                self.tick_count = u64::try_from(tc).map_err(|_| {
+                    self.make_error("compositor", "load", "tick_count is negative".to_string())
+                })?;
+            }
+            if let Some(et) = system.get("elapsed_time").and_then(|v| v.as_float()) {
+                self.elapsed_time = et;
             }
         }
         Ok(())
@@ -767,34 +783,7 @@ impl Compositor {
             ));
         }
 
-        // Extract partitions section
-        if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
-            for partition in &mut self.partitions {
-                if let Some(envelope_value) = partitions.get(partition.id()) {
-                    // Unwrap StateContribution envelope to get the inner state
-                    let state = if let Some(sc) = StateContribution::from_toml(envelope_value) {
-                        sc.state
-                    } else {
-                        envelope_value.clone()
-                    };
-                    fault::safe_load_state(partition.as_mut(), state)
-                        .into_result()
-                        .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-                }
-            }
-        }
-        // Restore system state
-        if let Some(system) = fragment.get("system").and_then(|v| v.as_table()) {
-            if let Some(tc) = system.get("tick_count").and_then(|v| v.as_integer()) {
-                self.tick_count = u64::try_from(tc).map_err(|_| {
-                    self.make_error("compositor", "load", "tick_count is negative".to_string())
-                })?;
-            }
-            if let Some(et) = system.get("elapsed_time").and_then(|v| v.as_float()) {
-                self.elapsed_time = et;
-            }
-        }
-        Ok(())
+        self.apply_state_fragment(fragment)
     }
 }
 
