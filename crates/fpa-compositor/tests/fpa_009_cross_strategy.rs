@@ -135,8 +135,8 @@ async fn lockstep_outer_embeds_supervisory_inner() {
     );
 
     // Note: outer.shutdown() signals the supervisory inner's tasks to stop
-    // but does NOT confirm they have stopped (fire-and-forget). This is
-    // intentional — see F5 spec finding in phase4analysis.md.
+    // but does NOT confirm they have stopped (FPA-009: shutdown is a signal,
+    // not a confirmation, under supervisory coordination).
     outer.shutdown().unwrap();
 }
 
@@ -459,7 +459,7 @@ async fn three_layer_mixed_strategy_nesting() {
     );
 
     // Note: outer.shutdown() signals the middle supervisory's tasks but
-    // does NOT confirm completion (fire-and-forget). See F5 spec finding.
+    // does NOT confirm completion (FPA-009: signal, not confirmation).
     outer.shutdown().unwrap();
 }
 

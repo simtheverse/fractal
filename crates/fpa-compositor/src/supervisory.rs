@@ -459,7 +459,7 @@ impl Partition for SupervisoryCompositor {
         // CONFIRM it, when the partition runs async tasks. Use
         // `async_shutdown()` for confirmed shutdown with task join.
         //
-        // See docs/feedback/phase4analysis.md F5 for the full spec finding.
+        // See FPA-009 in SPECIFICATION.md for the full spec text on this.
         self.state_machine
             .request_transition(TransitionRequest {
                 requested_by: self.id.clone(),

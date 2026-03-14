@@ -144,7 +144,13 @@ The compositor still:
 - **Controls lifecycle boundaries.** It tells partitions when they may start processing
   (after initialization is complete and the bus is connected) and when they must stop
   (shutdown). No partition begins or ends its processing loop without the compositor's
-  authorization.
+  authorization. Note that under supervisory coordination, the synchronous `shutdown()`
+  method is a *signal*, not a *confirmation*: it instructs sub-partitions to stop but
+  does not guarantee they have stopped by the time it returns. The compositor detects
+  actual termination through the same mechanisms it uses for fault detection — heartbeat
+  expiry, connection state, or health messages. For confirmed shutdown with task join,
+  implementations may provide an async shutdown path outside the synchronous Partition
+  trait.
 
 - **Owns the bus.** It publishes shared context, receives requests, and arbitrates shared
   state machines. Partitions interact with each other and with the compositor exclusively
