@@ -536,12 +536,13 @@ impl Compositor {
     fn build_signals(&self) -> HashMap<String, f64> {
         let mut signals = HashMap::new();
         for (id, value) in self.double_buffer.read_all() {
-            // Unwrap the StateContribution envelope to get the inner state
-            let inner = if let Some(sc) = StateContribution::from_toml(value) {
-                sc.state
-            } else {
-                value.clone()
-            };
+            // Navigate the StateContribution envelope by reference to avoid
+            // cloning the entire state tree. If the value has a "state" key
+            // (envelope format), read from that; otherwise read directly.
+            let inner = value
+                .as_table()
+                .and_then(|t| t.get("state"))
+                .unwrap_or(value);
             if let Some(table) = inner.as_table() {
                 for (key, val) in table {
                     if let Some(f) = val.as_float() {
