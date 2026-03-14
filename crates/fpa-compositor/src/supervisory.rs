@@ -227,23 +227,18 @@ impl SupervisoryCompositor {
 
         // Wait for all partitions to produce their first output store entry
         // (state from a successful init+step+contribute_state, or a fault).
+        // No separate deadline: each task's safe_init() enforces the 500ms
+        // timeout internally and will always produce an entry.
         let partition_ids: Vec<String> = self.partition_handles.iter()
             .map(|h| h.id.clone())
             .collect();
-        let init_deadline = Instant::now() + fault::INIT_TIMEOUT;
 
         loop {
             {
                 let store = self.output_store.lock().unwrap();
 
                 // Check for faults first — fail fast
-                if let Some((id, operation, message)) = store.iter().find_map(|(id, entry)| {
-                    if let PartitionOutput::Fault { operation, message } = &entry.output {
-                        Some((id.clone(), operation.clone(), message.clone()))
-                    } else {
-                        None
-                    }
-                }) {
+                if let Some((id, operation, message)) = Self::find_fault(&store) {
                     drop(store);
                     self.state_machine.force_state(ExecutionState::Error);
                     return Err(self.make_error(&id, &operation, message));
@@ -253,15 +248,6 @@ impl SupervisoryCompositor {
                 if partition_ids.iter().all(|id| store.contains_key(id)) {
                     break;
                 }
-            }
-
-            if Instant::now() >= init_deadline {
-                self.state_machine.force_state(ExecutionState::Error);
-                return Err(self.make_error(
-                    "compositor",
-                    "init",
-                    "partition(s) did not complete init within deadline".to_string(),
-                ));
             }
 
             tokio::time::sleep(Duration::from_millis(1)).await;
@@ -415,32 +401,25 @@ impl SupervisoryCompositor {
         }
     }
 
-    /// Check the output store for faulted partitions and return the first fault
-    /// as an error, transitioning to Error state (FPA-011).
-    fn check_for_faults(&mut self) -> Result<(), PartitionError> {
-        let store = self.output_store.lock().unwrap();
-        let fault_info = store.iter().find_map(|(id, entry)| {
+    /// Scan the output store for the first faulted partition.
+    /// Returns (id, operation, message) if a fault is found.
+    fn find_fault(store: &HashMap<String, FreshnessEntry>) -> Option<(String, String, String)> {
+        store.iter().find_map(|(id, entry)| {
             if let PartitionOutput::Fault { operation, message } = &entry.output {
                 Some((id.clone(), operation.clone(), message.clone()))
             } else {
                 None
             }
-        });
-        drop(store);
-
-        if let Some((id, operation, message)) = fault_info {
-            self.state_machine.force_state(ExecutionState::Error);
-            return Err(self.make_error(&id, &operation, message));
-        }
-        Ok(())
+        })
     }
 
     /// Read latest state from the output store, check heartbeat freshness,
     /// and publish aggregated state on the bus.
     ///
-    /// Before publishing, checks for faulted partitions recorded by spawned
-    /// tasks (FPA-011). If any partition has faulted, transitions to Error
-    /// state and returns the fault — propagating it to the outer layer.
+    /// Checks for faulted partitions atomically within the same lock
+    /// acquisition used to build the snapshot (FPA-011). If any partition
+    /// has faulted, transitions to Error state and returns the fault —
+    /// propagating it to the outer layer.
     ///
     /// Each partition entry includes freshness metadata:
     /// - `fresh`: whether the partition updated since the last check
@@ -457,14 +436,19 @@ impl SupervisoryCompositor {
             ));
         }
 
-        self.check_for_faults()?;
-
         self.tick_count += 1;
         let now = Instant::now();
 
         let store = self.output_store.lock().unwrap();
-        let mut table = toml::map::Map::new();
 
+        // Fault check and state snapshot in one lock acquisition
+        if let Some((id, operation, message)) = Self::find_fault(&store) {
+            drop(store);
+            self.state_machine.force_state(ExecutionState::Error);
+            return Err(self.make_error(&id, &operation, message));
+        }
+
+        let mut table = toml::map::Map::new();
         for (id, entry) in store.iter() {
             if let PartitionOutput::State(value) = &entry.output {
                 let age = now.duration_since(entry.updated_at);
@@ -554,19 +538,13 @@ impl SupervisoryCompositor {
         // Check for faults recorded during shutdown (FPA-011).
         // Must check before transitioning to Terminated so the error
         // is propagated to the caller.
-        let store = self.output_store.lock().unwrap();
-        let fault_info = store.iter().find_map(|(id, entry)| {
-            if let PartitionOutput::Fault { operation, message } = &entry.output {
-                Some((id.clone(), operation.clone(), message.clone()))
-            } else {
-                None
+        {
+            let store = self.output_store.lock().unwrap();
+            if let Some((id, operation, message)) = Self::find_fault(&store) {
+                drop(store);
+                self.state_machine.force_state(ExecutionState::Error);
+                return Err(self.make_error(&id, &operation, message));
             }
-        });
-        drop(store);
-
-        if let Some((id, operation, message)) = fault_info {
-            self.state_machine.force_state(ExecutionState::Error);
-            return Err(self.make_error(&id, &operation, message));
         }
 
         self.state_machine
