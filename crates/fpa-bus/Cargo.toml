@@ -1,0 +1,12 @@
+[package]
+name = "fpa-bus"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fpa-contract = { path = "../fpa-contract" }
+tokio = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+toml = { workspace = true }

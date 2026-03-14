@@ -1,0 +1,9 @@
+[package]
+name = "fpa-testkit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fpa-contract = { path = "../fpa-contract" }
+fpa-bus = { path = "../fpa-bus" }
+fpa-compositor = { path = "../fpa-compositor" }
