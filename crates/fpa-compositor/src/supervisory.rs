@@ -15,9 +15,77 @@ use crate::direct_signal::DirectSignal;
 use crate::fault;
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 
-/// Init result sent by each partition task after `safe_init()` completes.
+/// Init result sent by each partition task after init completes.
 /// Ok(id) on success, Err((id, operation, message)) on failure.
 type InitSignal = Result<String, (String, String, String)>;
+
+/// Run a partition lifecycle call on a blocking thread with true deadline
+/// enforcement (FPA-011).
+///
+/// The partition is moved into `spawn_blocking` so the tokio worker thread
+/// is free. `tokio::time::timeout` races the call against the deadline.
+///
+/// On success: returns the partition and the call's result.
+/// On timeout: the partition is abandoned on the blocking thread (it's
+///   faulted and won't be used again). Returns a PartitionError.
+/// On panic: the partition is lost. Returns a PartitionError.
+async fn supervised_lifecycle<T: Send + 'static>(
+    partition: Box<dyn Partition>,
+    deadline: Duration,
+    operation: &'static str,
+    f: impl FnOnce(&mut dyn Partition) -> Result<T, PartitionError> + Send + 'static,
+) -> Result<(Box<dyn Partition>, T), PartitionError> {
+    use std::panic::{self, AssertUnwindSafe};
+
+    // Capture ID before moving partition into spawn_blocking — needed for
+    // timeout/join-error cases where the partition is lost.
+    let partition_id = partition.id().to_string();
+
+    let result = tokio::time::timeout(
+        deadline,
+        tokio::task::spawn_blocking(move || {
+            let mut p = partition;
+            let call_result = panic::catch_unwind(AssertUnwindSafe(|| f(&mut *p)));
+            (p, call_result)
+        }),
+    )
+    .await;
+
+    match result {
+        // Call completed within deadline
+        Ok(Ok((p, Ok(Ok(value))))) => Ok((p, value)),
+        // Call returned an error
+        Ok(Ok((_p, Ok(Err(e))))) => Err(e),
+        // Call panicked — partition is in indeterminate state, abandoned
+        Ok(Ok((_p, Err(panic_info)))) => {
+            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            Err(PartitionError::new(
+                &partition_id, operation,
+                format!("panic during {}: {}", operation, msg),
+            ))
+        }
+        // spawn_blocking task failed
+        Ok(Err(_join_err)) => {
+            Err(PartitionError::new(
+                &partition_id, operation,
+                format!("{} task failed unexpectedly", operation),
+            ))
+        }
+        // Timeout — partition abandoned on blocking thread
+        Err(_) => {
+            Err(PartitionError::new(
+                &partition_id, operation,
+                format!("{} exceeded timeout of {}ms", operation, deadline.as_millis()),
+            ))
+        }
+    }
+}
 
 /// The output of a partition task: either successfully contributed state or a fault.
 #[derive(Debug, Clone)]
@@ -274,7 +342,7 @@ impl SupervisoryCompositor {
         let partitions = std::mem::take(&mut self.pending_partitions);
         let (init_tx, init_rx) = tokio::sync::mpsc::channel(partitions.len().max(1));
 
-        for mut partition in partitions {
+        for partition in partitions {
             let partition_id = partition.id().to_string();
             let store = Arc::clone(&self.output_store);
             let signals = Arc::clone(&self.emitted_signals);
@@ -287,34 +355,41 @@ impl SupervisoryCompositor {
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let join_handle = tokio::spawn(async move {
-                // Initialize — routed through fault wrapper for panic catching
-                // and timeout enforcement (FPA-011).
-                if let Err(e) = fault::safe_init(partition.as_mut()).into_result() {
-                    let id = partition.id().to_string();
-                    let operation = e.operation.clone();
-                    let message = e.message.clone();
-                    {
-                        let mut s = store.lock().unwrap();
-                        s.insert(
-                            id.clone(),
-                            FreshnessEntry {
-                                output: PartitionOutput::Fault {
-                                    operation: "init".to_string(),
-                                    message: message.clone(),
-                                },
-                                updated_at: Instant::now(),
-                                tick: 0,
-                            },
-                        );
+                // Initialize with true deadline enforcement (FPA-011).
+                // Runs on a blocking thread so the tokio worker is free.
+                let partition = match supervised_lifecycle(
+                    partition, fault::INIT_TIMEOUT, "init",
+                    |p| { p.init()?; Ok(()) },
+                ).await {
+                    Ok((p, ())) => {
+                        let _ = init_tx.send(Ok(p.id().to_string())).await;
+                        drop(init_tx);
+                        p
                     }
-                    let _ = init_tx.send(Err((id, operation, message))).await;
-                    return;
-                }
+                    Err(fault) => {
+                        let id = fault.partition_id.clone();
+                        let operation = fault.operation.clone();
+                        let message = fault.message.clone();
+                        {
+                            let mut s = store.lock().unwrap();
+                            s.insert(
+                                id.clone(),
+                                FreshnessEntry {
+                                    output: PartitionOutput::Fault {
+                                        operation: operation.clone(),
+                                        message: message.clone(),
+                                    },
+                                    updated_at: Instant::now(),
+                                    tick: 0,
+                                },
+                            );
+                        }
+                        let _ = init_tx.send(Err((id, operation, message))).await;
+                        return;
+                    }
+                };
 
-                // Signal init success — async_init() awaits this.
-                let _ = init_tx.send(Ok(partition.id().to_string())).await;
-                drop(init_tx);
-
+                let mut partition = Some(partition);
                 let mut tick: u64 = 0;
                 let dt = step_interval.as_secs_f64();
 
@@ -322,45 +397,60 @@ impl SupervisoryCompositor {
                     // Check for shutdown signal (non-blocking)
                     match shutdown_rx.try_recv() {
                         Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                            if let Err(e) = fault::safe_shutdown(partition.as_mut()).into_result() {
-                                let mut s = store.lock().unwrap();
-                                s.insert(
-                                    partition.id().to_string(),
-                                    FreshnessEntry {
-                                        output: PartitionOutput::Fault {
-                                            operation: "shutdown".to_string(),
-                                            message: e.message.clone(),
-                                        },
-                                        updated_at: Instant::now(),
-                                        tick,
-                                    },
-                                );
+                            if let Some(p) = partition.take() {
+                                match supervised_lifecycle(
+                                    p, fault::INIT_TIMEOUT, "shutdown",
+                                    |p| { p.shutdown()?; Ok(()) },
+                                ).await {
+                                    Ok((_p, ())) => { /* shutdown succeeded */ }
+                                    Err(fault) => {
+                                        let mut s = store.lock().unwrap();
+                                        s.insert(
+                                            fault.partition_id.clone(),
+                                            FreshnessEntry {
+                                                output: PartitionOutput::Fault {
+                                                    operation: fault.operation.clone(),
+                                                    message: fault.message.clone(),
+                                                },
+                                                updated_at: Instant::now(),
+                                                tick,
+                                            },
+                                        );
+                                    }
+                                }
                             }
                             break;
                         }
                         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                     }
 
-                    // Step — routed through fault wrapper (FPA-011)
-                    if let Err(e) = fault::safe_step(partition.as_mut(), dt).into_result() {
-                        let mut s = store.lock().unwrap();
-                        s.insert(
-                            partition.id().to_string(),
-                            FreshnessEntry {
-                                output: PartitionOutput::Fault {
-                                    operation: "step".to_string(),
-                                    message: e.message.clone(),
+                    // Step with true deadline enforcement (FPA-011).
+                    let p = partition.take().unwrap();
+                    match supervised_lifecycle(
+                        p, fault::STEP_TIMEOUT, "step",
+                        move |p| { p.step(dt)?; Ok(()) },
+                    ).await {
+                        Ok((p, ())) => { partition = Some(p); }
+                        Err(fault) => {
+                            let mut s = store.lock().unwrap();
+                            s.insert(
+                                fault.partition_id.clone(),
+                                FreshnessEntry {
+                                    output: PartitionOutput::Fault {
+                                        operation: fault.operation.clone(),
+                                        message: fault.message.clone(),
+                                    },
+                                    updated_at: Instant::now(),
+                                    tick,
                                 },
-                                updated_at: Instant::now(),
-                                tick,
-                            },
-                        );
-                        break;
+                            );
+                            break;
+                        }
                     }
                     tick += 1;
 
                     // Collect direct signals from inner compositor partitions (FPA-013)
-                    if let Some(any) = partition.as_any_mut() {
+                    if let Some(any) = partition.as_mut().and_then(|p| p.as_any_mut()) {
                         use crate::compositor::Compositor;
                         let drained = if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
                             inner_comp.drain_emitted_signals()
@@ -374,12 +464,18 @@ impl SupervisoryCompositor {
                         }
                     }
 
-                    // Contribute state — routed through fault wrapper (FPA-011)
-                    match fault::safe_contribute_state(partition.as_ref()) {
-                        Ok(value) => {
+                    // Contribute state with true deadline enforcement (FPA-011).
+                    let p = partition.take().unwrap();
+                    match supervised_lifecycle(
+                        p, fault::STEP_TIMEOUT, "contribute_state",
+                        |p| p.contribute_state(),
+                    ).await {
+                        Ok((p, value)) => {
+                            let id = p.id().to_string();
+                            partition = Some(p);
                             let mut s = store.lock().unwrap();
                             s.insert(
-                                partition.id().to_string(),
+                                id,
                                 FreshnessEntry {
                                     output: PartitionOutput::State(value),
                                     updated_at: Instant::now(),
@@ -387,14 +483,14 @@ impl SupervisoryCompositor {
                                 },
                             );
                         }
-                        Err(e) => {
+                        Err(fault) => {
                             let mut s = store.lock().unwrap();
                             s.insert(
-                                partition.id().to_string(),
+                                fault.partition_id.clone(),
                                 FreshnessEntry {
                                     output: PartitionOutput::Fault {
-                                        operation: "contribute_state".to_string(),
-                                        message: e.message.clone(),
+                                        operation: fault.operation.clone(),
+                                        message: fault.message.clone(),
                                     },
                                     updated_at: Instant::now(),
                                     tick,
@@ -619,6 +715,7 @@ impl SupervisoryCompositor {
                     table.insert(id.clone(), envelope.to_toml());
                 }
                 PartitionOutput::Fault { operation, message } => {
+                    self.state_machine.force_state(ExecutionState::Error);
                     return Err(self.make_error(id, operation, message.clone()));
                 }
             }
