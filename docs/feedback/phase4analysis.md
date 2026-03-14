@@ -268,54 +268,65 @@ trait for a guarantee that has no runtime effect. A production system that needs
 enforcement can layer it on via a wrapper trait or procedural macro without changing the
 core architecture.
 
-### F5. Supervisory shutdown is fire-and-forget in synchronous contexts (FPA-009, FPA-011) — RESOLVED
+### F5. Synchronous shutdown cannot confirm async task completion (FPA-009, FPA-011) — SPEC FEEDBACK
 
 **Spec text (FPA-009):** "The compositor is always the lifecycle authority: even when
 partitions self-schedule their processing, the compositor controls... when they must
 stop."
 
-**What the implementation reveals:** When a `SupervisoryCompositor` is nested inside a
-lock-step `Compositor`, the outer compositor calls `shutdown()` synchronously via the
-`Partition` trait. The supervisory's `Partition::shutdown()` implementation
-(`supervisory.rs` lines 439–463) sends shutdown signals to spawned tasks but does NOT
-await their completion — it can't, because the `Partition` trait's `shutdown()` is
-synchronous.
+**Spec text (FPA-011):** "`init()`, `load_state()`, and `shutdown()` calls shall each
+have a maximum duration of 500 ms."
 
-This means after `shutdown()` returns, spawned tokio tasks may still be running. The
-cross-strategy tests work around this with:
+**What the implementation reveals:** The spec conflates two distinct concepts under
+"lifecycle authority":
 
-```rust
-outer.shutdown().unwrap();
-tokio::time::sleep(Duration::from_millis(20)).await; // wait for tasks to stop
-```
+1. **Shutdown authority** — the compositor decides *when* shutdown happens.
+2. **Shutdown confirmation** — the compositor knows shutdown *has completed*.
 
-This is a test-only hack. In production, there is no guarantee that 20ms is sufficient,
-and the outer compositor has no way to verify that the inner supervisory's tasks have
-actually stopped.
+Under lock-step execution, these are the same thing: `shutdown()` returns, therefore it's
+done. Under supervisory coordination, they diverge. The synchronous `Partition` trait's
+`shutdown()` method can *signal* shutdown but cannot *confirm* that async tasks have
+actually stopped — because it cannot `await` their join handles.
 
-The supervisory compositor does provide `async_shutdown()` which awaits task completion,
-but this method is not callable through the `Partition` trait.
+This is not an implementation limitation that can be worked around. It is inherent to the
+architectural model: a supervisory compositor's partitions run as independent tasks
+(or on separate processes/nodes). Synchronous shutdown is always a signal, never a
+confirmation, in this execution strategy.
 
-**Recommended resolution:** The spec should address this boundary explicitly. Options:
+The prototype implements this honestly: `SupervisoryCompositor::shutdown()` (via the
+`Partition` trait) sends oneshot shutdown signals to all spawned tasks and returns
+immediately. The tasks stop asynchronously. For confirmed shutdown with task join, callers
+use the separate `async_shutdown()` method, which is not callable through the `Partition`
+trait.
 
-1. **Accept best-effort synchronous shutdown.** Document that when a supervisory
-   compositor is used as a partition, synchronous `shutdown()` is a signal, not a
-   guarantee. The async `async_shutdown()` is the authoritative shutdown path.
-2. **Add a blocking timeout.** The synchronous `shutdown()` could block for up to the
-   heartbeat timeout waiting for tasks to complete. This keeps the sync trait but adds
-   latency.
-3. **Make the Partition trait async.** This would solve the problem but is a
-   fundamental architectural change that affects every partition implementation.
+**Implications for the spec:**
 
-Option 1 is the most pragmatic for the spec — it acknowledges the limitation without
-overengineering the trait.
+- FPA-009's claim that the compositor "controls when [partitions] must stop" is accurate
+  for shutdown *authority* but misleading about shutdown *confirmation*. The compositor
+  controls *when* the signal is sent, but under supervisory coordination, it cannot
+  synchronously confirm that partitions have actually stopped.
 
-**Resolution (2026-03-13):** Resolved via Option 2. The synchronous `Partition::shutdown()`
-implementation in `SupervisoryCompositor` now sends shutdown signals and polls
-`JoinHandle::is_finished()` up to the heartbeat timeout before returning. Uses
-`std::thread::sleep(1ms)` polling rather than `block_on()` to avoid panicking when
-called from within a tokio runtime context. Post-shutdown sleep hacks removed from
-cross-strategy tests (`fpa_009_cross_strategy.rs`).
+- FPA-011's 500ms deadline for `shutdown()` needs to specify which concept it applies to.
+  If it applies to the *signal* (sending the shutdown command), 500ms is generous. If it
+  applies to *confirmation* (all tasks stopped), it is unenforceable through the
+  synchronous trait — the compositor would need to busy-wait or block, coupling the
+  shutdown deadline to an unrelated timeout parameter.
+
+**Recommended spec changes:**
+
+1. FPA-009 should distinguish between shutdown *signaling* (always available through the
+   synchronous trait) and shutdown *confirmation* (requires an async or polling mechanism).
+   The Partition trait's synchronous `shutdown()` is a signal. Confirmed shutdown requires
+   a separate mechanism outside the core trait.
+
+2. FPA-011 should clarify that the 500ms deadline applies to the `shutdown()` *call*
+   returning, not to the guarantee that all work has ceased. Under supervisory
+   coordination, work may continue briefly after `shutdown()` returns.
+
+3. The execution strategy explainer should document this split explicitly: under
+   supervisory coordination, shutdown confirmation is asynchronous, and the compositor
+   detects actual termination through the same mechanisms it uses for fault detection
+   (heartbeat expiry, connection state, health messages).
 
 ### F6. Compositional property tests are structural, not behavioral (FPA-037) — ACCEPTED
 

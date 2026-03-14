@@ -134,6 +134,9 @@ async fn lockstep_outer_embeds_supervisory_inner() {
         inner_count
     );
 
+    // Note: outer.shutdown() signals the supervisory inner's tasks to stop
+    // but does NOT confirm they have stopped (fire-and-forget). This is
+    // intentional — see F5 spec finding in phase4analysis.md.
     outer.shutdown().unwrap();
 }
 
@@ -277,11 +280,12 @@ async fn freshness_metadata_reflects_staleness_at_boundary() {
         "inner counter should be fresh initially"
     );
 
-    // Shut down the outer (which sends shutdown to the supervisory inner,
-    // stopping its partition tasks)
+    // Shut down the outer (which signals the supervisory inner's tasks to
+    // stop — fire-and-forget, see F5 spec finding).
     outer.shutdown().unwrap();
 
-    // Wait for the heartbeat timeout to expire
+    // Wait for tasks to receive the shutdown signal and for the heartbeat
+    // timeout (50ms) to expire so staleness is detectable.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Directly check the inner store for staleness
@@ -454,6 +458,8 @@ async fn three_layer_mixed_strategy_nesting() {
         "deep counter should have been stepped by the innermost lock-step compositor"
     );
 
+    // Note: outer.shutdown() signals the middle supervisory's tasks but
+    // does NOT confirm completion (fire-and-forget). See F5 spec finding.
     outer.shutdown().unwrap();
 }
 
