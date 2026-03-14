@@ -22,14 +22,14 @@ pub use messages::{CounterOutput, AccumulatorOutput, DoublerOutput};
 ///
 /// Each contract version defines its own canonical inputs, output property
 /// assertions, and tolerances. Implementations target a specific version.
+/// This is an enum rather than an open struct so that invalid versions are
+/// unrepresentable and match arms are exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ContractVersion(pub u32);
-
-impl ContractVersion {
+pub enum ContractVersion {
     /// Version 1: original contract (Counter, Accumulator).
-    pub const V1: ContractVersion = ContractVersion(1);
+    V1,
     /// Version 2: extended contract (adds Doubler).
-    pub const V2: ContractVersion = ContractVersion(2);
+    V2,
 }
 
 /// Canonical input builder for contract tests (FPA-036).
@@ -58,7 +58,6 @@ impl CanonicalInputs {
         match version {
             ContractVersion::V1 => 1.0 / 60.0,
             ContractVersion::V2 => 1.0 / 60.0,
-            _ => 1.0 / 60.0,
         }
     }
 
@@ -83,7 +82,6 @@ impl ContractTolerances {
         match version {
             ContractVersion::V1 => 1e-12,
             ContractVersion::V2 => 1e-10,
-            _ => 1e-12,
         }
     }
 }
