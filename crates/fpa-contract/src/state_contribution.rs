@@ -46,6 +46,9 @@ impl StateContribution {
         let state = table.get("state")?.clone();
         let fresh = table.get("fresh")?.as_bool()?;
         let age_ms = table.get("age_ms")?.as_integer()?;
+        if age_ms < 0 {
+            return None;
+        }
         Some(Self {
             state,
             fresh,
