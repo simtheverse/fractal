@@ -9,6 +9,7 @@ pub mod registry;
 
 pub use error::ConfigError;
 pub use fragment::{CompositionFragment, EventConfig, PartitionConfig, TriggerConfig};
+pub use convert::validated_event_definition;
 pub use loader::{load_from_str, resolve_extends};
 pub use merge::deep_merge;
 pub use registry::FragmentRegistry;

@@ -8,6 +8,11 @@
 //! - Implements Partition trait for nestability
 //! - Reports partition errors to the output store
 //! - Tracks stale partitions
+//!
+//! FPA-011 supervisory fault handling tests (added by audit):
+//! - Panics during step/init are caught (not raw unwinds)
+//! - Per-invocation timeouts enforced (50ms step, 500ms init)
+//! - Errors include compositor context (partition id, operation)
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -15,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use fpa_bus::{BusExt, BusReader, InProcessBus};
 use fpa_compositor::compositor::SharedContext;
-use fpa_compositor::supervisory::{FreshnessEntry, SupervisoryCompositor};
+use fpa_compositor::supervisory::{FreshnessEntry, PartitionOutput, SupervisoryCompositor};
 use fpa_contract::test_support::Counter;
 use fpa_contract::{Partition, PartitionError};
 
@@ -35,6 +40,29 @@ async fn wait_for_output(
         }
         if Instant::now() > deadline {
             panic!("timed out waiting for partition '{}' output", id);
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Poll the output store until the given partition has a fault entry, or panic on timeout.
+async fn wait_for_fault(
+    store: &Arc<Mutex<HashMap<String, FreshnessEntry>>>,
+    id: &str,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        {
+            let s = store.lock().unwrap();
+            if let Some(entry) = s.get(id) {
+                if entry.is_fault() {
+                    return;
+                }
+            }
+        }
+        if Instant::now() > deadline {
+            panic!("timed out waiting for partition '{}' fault", id);
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
@@ -66,8 +94,8 @@ async fn partition_runs_own_processing_loop() {
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("counter-1").expect("partition should have written state");
     let count = entry
-        .value
-        .as_table()
+        .state()
+        .and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .unwrap();
@@ -113,7 +141,7 @@ async fn lifecycle_management_init_and_shutdown() {
         let store = compositor.output_store().lock().unwrap();
         store
             .get("counter-1")
-            .and_then(|e| e.value.as_table())
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
             .and_then(|t| t.get("count"))
             .and_then(|v| v.as_integer())
             .unwrap_or(0)
@@ -132,7 +160,7 @@ async fn lifecycle_management_init_and_shutdown() {
         let store = compositor.output_store().lock().unwrap();
         store
             .get("counter-1")
-            .and_then(|e| e.value.as_table())
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
             .and_then(|t| t.get("count"))
             .and_then(|v| v.as_integer())
             .unwrap_or(0)
@@ -299,14 +327,14 @@ async fn multiple_partitions_run_independently() {
 
     let count_a = s
         .get("counter-a")
-        .and_then(|e| e.value.as_table())
+        .and_then(|e| e.state()).and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .expect("counter-a should have state");
 
     let count_b = s
         .get("counter-b")
-        .and_then(|e| e.value.as_table())
+        .and_then(|e| e.state()).and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .expect("counter-b should have state");
@@ -348,11 +376,16 @@ async fn supervisory_compositor_implements_partition_trait() {
     let state = Partition::contribute_state(&compositor).unwrap();
     assert!(state.as_table().is_some());
 
-    // load_state populates the output store
+    // load_state populates the output store (must use StateContribution envelope)
+    let envelope = fpa_contract::StateContribution {
+        state: toml::Value::String("restored-value".to_string()),
+        fresh: true,
+        age_ms: 0,
+    };
     let mut test_table = toml::map::Map::new();
     test_table.insert(
         "restored-partition".to_string(),
-        toml::Value::String("restored-value".to_string()),
+        envelope.to_toml(),
     );
     Partition::load_state(&mut compositor, toml::Value::Table(test_table)).unwrap();
 
@@ -433,14 +466,14 @@ async fn per_partition_step_interval() {
     let s = store.lock().unwrap();
     let fast_count = s
         .get("fast")
-        .and_then(|e| e.value.as_table())
+        .and_then(|e| e.state()).and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .unwrap_or(0);
 
     let slow_count = s
         .get("slow")
-        .and_then(|e| e.value.as_table())
+        .and_then(|e| e.state()).and_then(|v| v.as_table())
         .and_then(|t| t.get("count"))
         .and_then(|v| v.as_integer())
         .unwrap_or(0);
@@ -505,24 +538,325 @@ async fn partition_step_error_reported_to_store() {
 
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("failing-1").expect("should have error entry");
-    let error_msg = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("error"))
-        .and_then(|v| v.as_str());
-    assert!(
-        error_msg.is_some(),
-        "error should be reported in the output store"
-    );
-    assert!(
-        error_msg.unwrap().contains("intentional failure"),
-        "error message should contain the failure reason"
-    );
+    match &entry.output {
+        PartitionOutput::Fault { operation, message } => {
+            assert!(
+                message.contains("intentional failure"),
+                "error message should contain the failure reason, got: {}",
+                message
+            );
+            assert_eq!(operation, "step");
+        }
+        PartitionOutput::State(_) => panic!("expected fault, got state"),
+    }
+}
 
-    let operation = entry
-        .value
-        .as_table()
-        .and_then(|t| t.get("operation"))
-        .and_then(|v| v.as_str());
-    assert_eq!(operation, Some("step"));
+// --- FPA-011 supervisory fault handling tests ---
+//
+// These tests verify that the supervisory compositor applies the same fault
+// handling discipline as the lock-step compositor: panic catching, timeout
+// enforcement, and error context enrichment. The lock-step compositor routes
+// all lifecycle calls through fault::safe_* wrappers; the supervisory
+// compositor should provide equivalent protection in its spawned tasks.
+
+/// A partition that panics during a specified operation.
+struct SupervisoryPanickingPartition {
+    id: String,
+    panic_on: String,
+}
+
+impl Partition for SupervisoryPanickingPartition {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn init(&mut self) -> Result<(), PartitionError> {
+        if self.panic_on == "init" {
+            panic!("partition panicked during init");
+        }
+        Ok(())
+    }
+
+    fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
+        if self.panic_on == "step" {
+            panic!("partition panicked during step");
+        }
+        Ok(())
+    }
+
+    fn shutdown(&mut self) -> Result<(), PartitionError> {
+        Ok(())
+    }
+
+    fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+        Ok(toml::Value::Table(toml::map::Map::new()))
+    }
+
+    fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
+        Ok(())
+    }
+}
+
+/// A partition that sleeps during a specified operation to test timeout detection.
+struct SupervisorySlowPartition {
+    id: String,
+    delay_ms: u64,
+    slow_on: String,
+}
+
+impl Partition for SupervisorySlowPartition {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn init(&mut self) -> Result<(), PartitionError> {
+        if self.slow_on == "init" {
+            std::thread::sleep(Duration::from_millis(self.delay_ms));
+        }
+        Ok(())
+    }
+
+    fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
+        if self.slow_on == "step" {
+            std::thread::sleep(Duration::from_millis(self.delay_ms));
+        }
+        Ok(())
+    }
+
+    fn shutdown(&mut self) -> Result<(), PartitionError> {
+        Ok(())
+    }
+
+    fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+        Ok(toml::Value::Table(toml::map::Map::new()))
+    }
+
+    fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
+        Ok(())
+    }
+}
+
+/// FPA-011: A partition panicking during step() in a supervisory task should be
+/// caught and reported to the output store — not silently kill the tokio task.
+#[tokio::test]
+async fn panic_during_supervisory_step_is_caught() {
+    let bus = InProcessBus::new("test-bus");
+    let panicker = SupervisoryPanickingPartition {
+        id: "panicker".to_string(),
+        panic_on: "step".to_string(),
+    };
+
+    let mut compositor = SupervisoryCompositor::new(
+        "test",
+        vec![Box::new(panicker)],
+        Box::new(bus),
+        Duration::from_secs(1),
+    )
+    .with_step_interval(Duration::from_millis(5));
+
+    compositor.init().unwrap();
+
+    // Wait for the panic to be caught and reported
+    wait_for_output(compositor.output_store(), "panicker", Duration::from_secs(2)).await;
+
+    let store = compositor.output_store().lock().unwrap();
+    let entry = store.get("panicker").expect("should have error entry");
+    match &entry.output {
+        PartitionOutput::Fault { operation, message } => {
+            assert!(
+                message.contains("panic"),
+                "error message should mention panic: {}",
+                message
+            );
+            assert_eq!(
+                operation, "step",
+                "error should identify the faulting operation"
+            );
+        }
+        PartitionOutput::State(_) => panic!("expected fault, got state"),
+    }
+}
+
+/// FPA-011: A partition panicking during init() in a supervisory task should be
+/// caught and returned from async_init().
+#[tokio::test]
+async fn panic_during_supervisory_init_is_caught() {
+    let bus = InProcessBus::new("test-bus");
+    let panicker = SupervisoryPanickingPartition {
+        id: "panicker".to_string(),
+        panic_on: "init".to_string(),
+    };
+
+    let mut compositor = SupervisoryCompositor::new(
+        "test",
+        vec![Box::new(panicker)],
+        Box::new(bus),
+        Duration::from_secs(1),
+    )
+    .with_step_interval(Duration::from_millis(5));
+
+    // async_init awaits init completion and returns faults (FPA-011)
+    let result = compositor.async_init().await;
+    assert!(result.is_err(), "async_init should return error when partition panics");
+
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("panic"),
+        "error message should mention panic: {}",
+        err.message
+    );
+    assert_eq!(
+        err.operation, "init",
+        "error should identify init as the faulting operation"
+    );
+    assert_eq!(
+        compositor.state(),
+        fpa_compositor::state_machine::ExecutionState::Error,
+        "compositor should be in Error state after init fault"
+    );
+}
+
+/// FPA-011: A partition whose step() exceeds the 50ms timeout should be
+/// reported as a timeout fault in the supervisory output store.
+#[tokio::test]
+async fn slow_supervisory_step_detected_as_timeout() {
+    let bus = InProcessBus::new("test-bus");
+    let slowpoke = SupervisorySlowPartition {
+        id: "slowpoke".to_string(),
+        delay_ms: 100, // exceeds 50ms step timeout
+        slow_on: "step".to_string(),
+    };
+
+    let mut compositor = SupervisoryCompositor::new(
+        "test",
+        vec![Box::new(slowpoke)],
+        Box::new(bus),
+        Duration::from_secs(1),
+    )
+    .with_step_interval(Duration::from_millis(5));
+
+    compositor.init().unwrap();
+
+    // Wait for the timeout to be detected and reported
+    wait_for_output(compositor.output_store(), "slowpoke", Duration::from_secs(2)).await;
+
+    let store = compositor.output_store().lock().unwrap();
+    let entry = store.get("slowpoke").expect("should have entry");
+    match &entry.output {
+        PartitionOutput::Fault { message, .. } => {
+            assert!(
+                message.contains("timeout") || message.contains("exceeded"),
+                "error message should mention timeout: {}",
+                message
+            );
+        }
+        PartitionOutput::State(_) => panic!("expected timeout fault, got state"),
+    }
+}
+
+/// FPA-011: A partition whose init() exceeds the 500ms timeout should be
+/// returned as a fault from async_init().
+#[tokio::test]
+async fn slow_supervisory_init_detected_as_timeout() {
+    let bus = InProcessBus::new("test-bus");
+    let slowpoke = SupervisorySlowPartition {
+        id: "slowpoke".to_string(),
+        delay_ms: 600, // exceeds 500ms init timeout
+        slow_on: "init".to_string(),
+    };
+
+    let mut compositor = SupervisoryCompositor::new(
+        "test",
+        vec![Box::new(slowpoke)],
+        Box::new(bus),
+        Duration::from_secs(1),
+    )
+    .with_step_interval(Duration::from_millis(5));
+
+    // async_init awaits init completion and returns timeouts (FPA-011).
+    let result = compositor.async_init().await;
+    assert!(result.is_err(), "async_init should return error when partition times out");
+
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("timeout") || err.message.contains("exceeded") || err.message.contains("deadline"),
+        "error message should mention timeout: {}",
+        err.message
+    );
+    assert_eq!(
+        compositor.state(),
+        fpa_compositor::state_machine::ExecutionState::Error,
+        "compositor should be in Error state after init timeout"
+    );
+}
+
+/// FPA-011: Error context from supervisory tasks should include the partition
+/// ID and faulting operation, matching the lock-step compositor's context
+/// enrichment.
+#[tokio::test]
+async fn supervisory_error_includes_partition_id_and_operation() {
+    let bus = InProcessBus::new("test-bus");
+
+    struct FailOnSecondStep {
+        id: String,
+        count: u32,
+    }
+
+    impl Partition for FailOnSecondStep {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn init(&mut self) -> Result<(), PartitionError> {
+            Ok(())
+        }
+        fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
+            self.count += 1;
+            if self.count >= 2 {
+                return Err(PartitionError::new(&self.id, "step", "specific-failure-message"));
+            }
+            Ok(())
+        }
+        fn shutdown(&mut self) -> Result<(), PartitionError> {
+            Ok(())
+        }
+        fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+            Ok(toml::Value::Table(toml::map::Map::new()))
+        }
+        fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
+            Ok(())
+        }
+    }
+
+    let partition = FailOnSecondStep {
+        id: "my-partition-42".to_string(),
+        count: 0,
+    };
+
+    let mut compositor = SupervisoryCompositor::new(
+        "test",
+        vec![Box::new(partition)],
+        Box::new(bus),
+        Duration::from_secs(1),
+    )
+    .with_step_interval(Duration::from_millis(5));
+
+    compositor.init().unwrap();
+
+    // Wait for the fault to surface in the output store (the partition succeeds
+    // on the first step, so wait_for_output would return the initial state entry)
+    wait_for_fault(compositor.output_store(), "my-partition-42", Duration::from_secs(2)).await;
+
+    let store = compositor.output_store().lock().unwrap();
+    let entry = store.get("my-partition-42").expect("should have entry");
+    match &entry.output {
+        PartitionOutput::Fault { operation, message } => {
+            assert!(
+                message.contains("specific-failure-message"),
+                "error should preserve the original error message: {}",
+                message
+            );
+            assert_eq!(operation, "step", "error should identify the faulting operation");
+        }
+        PartitionOutput::State(_) => panic!("expected fault, got state"),
+    }
 }

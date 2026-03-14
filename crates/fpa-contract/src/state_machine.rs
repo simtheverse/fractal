@@ -4,6 +4,7 @@
 //! crate so that all partitions can observe execution state and submit
 //! transition requests without depending on the compositor crate.
 
+use std::cell::Cell;
 use std::fmt;
 
 /// Execution states for the compositor lifecycle.
@@ -73,44 +74,49 @@ impl std::error::Error for TransitionError {}
 /// - ShuttingDown -> Terminated
 /// - ShuttingDown -> Error
 /// - Error -> ShuttingDown
+/// Uses `Cell` for interior mutability so that `force_state` and
+/// `request_transition` can be called from `&self` contexts (e.g.,
+/// `Partition::contribute_state`). This is safe because `ExecutionState`
+/// is `Copy` and `StateMachine` is not `Sync` (single-threaded access).
 pub struct StateMachine {
-    state: ExecutionState,
+    state: Cell<ExecutionState>,
 }
 
 impl StateMachine {
     /// Create a new state machine in the Uninitialized state.
     pub fn new() -> Self {
         Self {
-            state: ExecutionState::Uninitialized,
+            state: Cell::new(ExecutionState::Uninitialized),
         }
     }
 
     /// Get the current execution state.
     pub fn state(&self) -> ExecutionState {
-        self.state
+        self.state.get()
     }
 
     /// Check whether a transition from the current state to the target is valid.
     pub fn is_valid_transition(&self, target: ExecutionState) -> bool {
-        Self::valid_transitions(self.state).contains(&target)
+        Self::valid_transitions(self.state.get()).contains(&target)
     }
 
     /// Request a state transition. Returns Ok if the transition is valid,
     /// or Err with a TransitionError if not.
     pub fn request_transition(
-        &mut self,
+        &self,
         request: TransitionRequest,
     ) -> Result<ExecutionState, TransitionError> {
-        if self.is_valid_transition(request.target_state) {
-            self.state = request.target_state;
-            Ok(self.state)
+        let current = self.state.get();
+        if Self::valid_transitions(current).contains(&request.target_state) {
+            self.state.set(request.target_state);
+            Ok(request.target_state)
         } else {
             Err(TransitionError {
-                from: self.state,
+                from: current,
                 to: request.target_state,
                 reason: format!(
                     "transition from {} to {} is not allowed (requested by '{}')",
-                    self.state, request.target_state, request.requested_by
+                    current, request.target_state, request.requested_by
                 ),
             })
         }
@@ -122,8 +128,8 @@ impl StateMachine {
     /// sub-partition faults, the compositor forces the state to Error without
     /// going through the normal request path. Partitions should use
     /// `request_transition` for all normal state changes.
-    pub fn force_state(&mut self, state: ExecutionState) {
-        self.state = state;
+    pub fn force_state(&self, state: ExecutionState) {
+        self.state.set(state);
     }
 
     /// Returns valid target states from the given state.

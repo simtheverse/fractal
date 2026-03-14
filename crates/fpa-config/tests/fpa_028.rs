@@ -320,6 +320,108 @@ value = 100.0
     assert_eq!(fired[1].action_id, "activate_cooling");
 }
 
+/// FPA-029: validated_event_definition rejects unregistered actions at config load time.
+#[test]
+fn validated_conversion_rejects_unregistered_action() {
+    use fpa_config::{validated_event_definition, EventConfig};
+    use fpa_events::ActionRegistry;
+    use std::collections::HashMap;
+
+    let mut registry = ActionRegistry::new();
+    registry.register("stop_simulation", "system");
+
+    let config = EventConfig {
+        id: "e1".to_string(),
+        trigger: TriggerConfig::Time { at: 10.0 },
+        action: "bogus_action".to_string(),
+        scope: Some("system".to_string()),
+        parameters: HashMap::new(),
+    };
+
+    let result = validated_event_definition(&config, &registry, "system");
+    assert!(result.is_err(), "unregistered action should be rejected at config load time");
+    assert!(
+        result.unwrap_err().contains("not registered"),
+        "error should explain the action is not registered"
+    );
+}
+
+/// FPA-029: validated_event_definition accepts registered actions.
+#[test]
+fn validated_conversion_accepts_registered_action() {
+    use fpa_config::{validated_event_definition, EventConfig};
+    use fpa_events::ActionRegistry;
+    use std::collections::HashMap;
+
+    let mut registry = ActionRegistry::new();
+    registry.register("stop_simulation", "system");
+
+    let config = EventConfig {
+        id: "timeout".to_string(),
+        trigger: TriggerConfig::Time { at: 10.0 },
+        action: "stop_simulation".to_string(),
+        scope: Some("system".to_string()),
+        parameters: HashMap::new(),
+    };
+
+    let result = validated_event_definition(&config, &registry, "system");
+    assert!(result.is_ok(), "registered action should be accepted");
+}
+
+/// FPA-029: validated_event_definition rejects cross-scope action usage.
+#[test]
+fn validated_conversion_rejects_cross_scope_action() {
+    use fpa_config::{validated_event_definition, EventConfig};
+    use fpa_events::ActionRegistry;
+    use std::collections::HashMap;
+
+    let mut registry = ActionRegistry::new();
+    registry.register("ignite", "system.physics");
+
+    let config = EventConfig {
+        id: "e1".to_string(),
+        trigger: TriggerConfig::Time { at: 5.0 },
+        action: "ignite".to_string(),
+        scope: Some("system.gnc".to_string()),
+        parameters: HashMap::new(),
+    };
+
+    let result = validated_event_definition(&config, &registry, "system.gnc");
+    assert!(
+        result.is_err(),
+        "action from system.physics should not be usable at system.gnc"
+    );
+}
+
+/// FPA-029: When an event config omits the scope field, validated_event_definition
+/// uses the caller-provided default_scope for validation. A system-level action
+/// should be accepted when the default scope is "system".
+#[test]
+fn validated_conversion_uses_default_scope_when_omitted() {
+    use fpa_config::{validated_event_definition, EventConfig};
+    use fpa_events::ActionRegistry;
+    use std::collections::HashMap;
+
+    let mut registry = ActionRegistry::new();
+    registry.register("stop_simulation", "system");
+
+    let config = EventConfig {
+        id: "timeout".to_string(),
+        trigger: TriggerConfig::Time { at: 10.0 },
+        action: "stop_simulation".to_string(),
+        scope: None, // omitted — should use default_scope
+        parameters: HashMap::new(),
+    };
+
+    // With correct default_scope, the action is accepted
+    let result = validated_event_definition(&config, &registry, "system");
+    assert!(result.is_ok(), "omitted scope with default_scope='system' should accept system-level action");
+
+    // The resulting EventAction should carry the default scope
+    let def = result.unwrap();
+    assert_eq!(def.action.scope, "system", "omitted scope should resolve to default_scope");
+}
+
 /// Fragments without events still parse (backwards compatibility).
 #[test]
 fn fragment_without_events_parses() {

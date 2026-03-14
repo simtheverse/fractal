@@ -103,6 +103,46 @@ fn snapshot_contains_time_and_execution_state() {
     assert_eq!(exec_state, "Running");
 }
 
+/// Loading a state fragment with bare values (no StateContribution envelope)
+/// should be rejected. Partition state entries must use the StateContribution
+/// format (state/fresh/age_ms) to preserve freshness metadata integrity.
+///
+/// This test documents the expected behavior per FPA-022: state snapshots are
+/// composition fragments produced by contribute_state(), which always wraps
+/// output in StateContribution envelopes. Loading bare values silently would
+/// bypass freshness metadata and violate the contract boundary.
+#[test]
+fn load_rejects_bare_values_without_envelope() {
+    let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(Counter::new("counter")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
+
+    compositor.init().unwrap();
+    compositor.run_tick(1.0).unwrap();
+    compositor.pause().unwrap();
+
+    // Construct a fragment with bare partition state (no StateContribution envelope).
+    // This is NOT a valid snapshot — snapshots always use the envelope format.
+    let bare_fragment: toml::Value = toml::from_str(
+        r#"
+        [system]
+        tick_count = 0
+
+        [partitions.counter]
+        count = 42
+        "#,
+    )
+    .unwrap();
+
+    let result = compositor.load(bare_fragment);
+    assert!(
+        result.is_err(),
+        "loading bare values without StateContribution envelope should be rejected"
+    );
+}
+
 /// A fragment extending a snapshot can override a partition's state.
 #[test]
 fn snapshot_with_extends_override() {
