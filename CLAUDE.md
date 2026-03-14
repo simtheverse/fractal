@@ -62,7 +62,7 @@ hacks that make tests pass.
 
 ## Development philosophy
 - When considering solutions, think critically and challenge assumptions, including the specification (the prototype aims to inform the spec after all.) 
--- Anything is up for grabs, but the best, most effective, and most sustainable solution should be selected.
+  - Anything is up for grabs, but the best, most effective, and most sustainable solution should be selected.
 - Simple is better than complex.
 - Treat the root cause, not the symptom.
 - For FPA to be successful, the prototype must be of the highest quality and a scalable bootstrap for FPA applications.
