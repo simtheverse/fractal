@@ -135,9 +135,6 @@ async fn lockstep_outer_embeds_supervisory_inner() {
     );
 
     outer.shutdown().unwrap();
-
-    // Give spawned tasks time to terminate
-    tokio::time::sleep(Duration::from_millis(20)).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +455,6 @@ async fn three_layer_mixed_strategy_nesting() {
     );
 
     outer.shutdown().unwrap();
-    tokio::time::sleep(Duration::from_millis(20)).await;
 }
 
 // ---------------------------------------------------------------------------

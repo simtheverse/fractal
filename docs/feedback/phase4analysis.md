@@ -87,7 +87,7 @@ from Phase 0 onward.
 Each finding includes the spec text it relates to, what the implementation revealed,
 and a recommended resolution.
 
-### F1. Freshness metadata representation is underspecified (FPA-009)
+### F1. Freshness metadata representation is underspecified (FPA-009) — RESOLVED
 
 **Spec text (FPA-009):** "The compositor shall indicate data freshness — whether its
 output was computed for the current invocation or is the most recent previously computed
@@ -135,7 +135,14 @@ crate. Options:
 
 Option 2 is the least invasive and consistent with the TOML-everywhere approach.
 
-### F2. `contribute_state()` output format diverges between compositor types (FPA-009, FPA-012, FPA-022)
+**Resolution (2026-03-13):** Resolved via `StateContribution` type defined in
+`fpa-contract/src/state_contribution.rs`. Both compositor types now wrap each
+partition's state in a uniform `StateContribution { state, fresh, age_ms }` envelope.
+Lock-step always reports `fresh: true, age_ms: 0`. Supervisory derives from heartbeat.
+Two new tests verify the type is importable from the contract crate and that both
+strategies produce the same format. See commit `2e67013`.
+
+### F2. `contribute_state()` output format diverges between compositor types (FPA-009, FPA-012, FPA-022) — RESOLVED
 
 **Spec text (FPA-012):** "A partition that is itself a compositor shall implement the
 state contribution contract by recursively invoking `contribute_state()` on its
@@ -184,6 +191,10 @@ strategy = "supervisory"
 This preserves the composition fragment compatibility the spec requires while still
 carrying freshness information.
 
+**Resolution (2026-03-13):** Resolved together with F1. The `StateContribution` type
+provides the uniform envelope, and both compositor types use it. See F1 resolution
+note and commit `2e67013`.
+
 ### F3. NetworkBus is a structural stub — serialization gap remains (FPA-004)
 
 **Spec text (FPA-004):** "The system shall support... (c) network-based
@@ -209,7 +220,7 @@ text. Add a note to FPA-004 that the network transport mode requires messages to
 implement serialization, and that this is expressed through a `NetworkMessage` subtrait
 or equivalent mechanism — not by adding serde bounds to the base `Message` trait.
 
-### F4. Contract versioning is convention-based, not type-enforced (FPA-039)
+### F4. Contract versioning is convention-based, not type-enforced (FPA-039) — ACCEPTED
 
 **Spec text (implied by FPA-039):** "Contract version N has own reference data; impl
 targeting v N unaffected by v N+1."
@@ -247,7 +258,17 @@ Alternatively, if type enforcement is desired, the spec should define how contra
 version relates to the `Partition` trait — e.g., a `contract_version()` method or an
 associated type.
 
-### F5. Supervisory shutdown is fire-and-forget in synchronous contexts (FPA-009, FPA-011)
+**Disposition (2026-03-13):** Accepted as a deliberate design choice. Convention-based
+versioning is appropriate for the prototype and consistent with the spec's intent. The
+`Message` trait already has `VERSION: u32` for runtime-relevant per-message versioning.
+Contract-level versioning is a test discipline concern — scoping reference data so that
+V1 tests don't see V2 inputs — and convention enforcement is sufficient for this. Adding
+a `contract_version()` method to `Partition` would be a breaking change to the core
+trait for a guarantee that has no runtime effect. A production system that needs stronger
+enforcement can layer it on via a wrapper trait or procedural macro without changing the
+core architecture.
+
+### F5. Supervisory shutdown is fire-and-forget in synchronous contexts (FPA-009, FPA-011) — RESOLVED
 
 **Spec text (FPA-009):** "The compositor is always the lifecycle authority: even when
 partitions self-schedule their processing, the compositor controls... when they must
@@ -288,6 +309,13 @@ but this method is not callable through the `Partition` trait.
 
 Option 1 is the most pragmatic for the spec — it acknowledges the limitation without
 overengineering the trait.
+
+**Resolution (2026-03-13):** Resolved via Option 2. The synchronous `Partition::shutdown()`
+implementation in `SupervisoryCompositor` now sends shutdown signals and polls
+`JoinHandle::is_finished()` up to the heartbeat timeout before returning. Uses
+`std::thread::sleep(1ms)` polling rather than `block_on()` to avoid panicking when
+called from within a tokio runtime context. Post-shutdown sleep hacks removed from
+cross-strategy tests (`fpa_009_cross_strategy.rs`).
 
 ### F6. Compositional property tests are structural, not behavioral (FPA-037)
 

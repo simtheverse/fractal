@@ -426,8 +426,9 @@ impl Partition for SupervisoryCompositor {
     }
 
     fn shutdown(&mut self) -> Result<(), PartitionError> {
-        // Synchronous shutdown: send signals but don't await join handles.
-        // Tasks will terminate on their own after receiving the signal.
+        // Synchronous shutdown with blocking wait (FPA-009: compositor controls
+        // when partitions must stop). Sends shutdown signals and polls task
+        // completion up to the heartbeat timeout.
         self.state_machine
             .request_transition(TransitionRequest {
                 requested_by: self.id.clone(),
@@ -436,9 +437,16 @@ impl Partition for SupervisoryCompositor {
             .map_err(|e| self.make_error("compositor", "shutdown", e.to_string()))?;
 
         let handles = std::mem::take(&mut self.partition_handles);
+        let deadline = Instant::now() + self.heartbeat_timeout;
+
+        // Send shutdown signals, then poll for completion up to the deadline.
+        // Uses is_finished() polling rather than block_on() to avoid panicking
+        // when called from within a tokio runtime context.
         for handle in handles {
             let _ = handle.shutdown_tx.send(());
-            // Don't await - tasks will terminate on their own
+            while !handle.join_handle.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
 
         self.state_machine

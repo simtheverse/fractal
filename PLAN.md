@@ -445,7 +445,23 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 ## Phase 5 — System Test Infrastructure
 
 > Depends on: Phase 4 (all tracks).
-> Two parallel tracks.
+> Three parallel tracks.
+
+### Track J2: Network Transport Serialization
+
+**Requirements covered:** FPA-004 (network transport — serialization gap)
+
+> Phase 3 Track J implemented `NetworkBus` as a structural stub (clone-based,
+> same as `InProcessBus`). Serialization via `serde` was not implemented despite
+> being listed in 3J.1. This track completes the network transport implementation.
+> See `docs/feedback/FPA-004-network.md` for the proposed `NetworkMessage` subtrait
+> approach.
+
+- [ ] **5J2.1** Implement `NetworkMessage` subtrait (or equivalent) adding `Serialize + Deserialize` bounds without modifying the base `Message` trait
+- [ ] **5J2.2** Update `NetworkBus` to serialize/deserialize messages to bytes instead of cloning
+- [ ] **5J2.3** Test: messages round-trip through serialization with identical content
+- [ ] **5J2.4** Test: `NetworkBus` with serialization produces identical final state to `InProcessBus` (non-vacuous verification)
+- [ ] **5J2.5** All network serialization tests pass
 
 ### Track O: System Test Harness
 
@@ -560,7 +576,8 @@ Phase 4  ┌─ Track M (Cross-strategy; needs K+L) ──► │
          ├─ Track H-validation (Full docs check) ──► ├──►
          └─ Track N (Reference data; needs 2b+) ───► │
                                                       │
-Phase 5  ── Track O (System tests) ────────────────► ├──►
+Phase 5  ┌─ Track J2 (Network serialization) ──────► │
+         └─ Track O (System tests) ────────────────► ├──►
                                                       │
 Phase 6  ┌─ Track P (Replaceability eval) ─────────► │
          ├─ Track Q (Determinism eval) ────────────► ├──►
