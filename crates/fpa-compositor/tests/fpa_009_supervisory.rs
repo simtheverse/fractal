@@ -624,9 +624,6 @@ impl Partition for SupervisorySlowPartition {
 
 /// FPA-011: A partition panicking during step() in a supervisory task should be
 /// caught and reported to the output store — not silently kill the tokio task.
-///
-/// FAILS: supervisory tasks call partition.step() directly without
-/// fault::safe_step(), so panics kill the tokio task instead of being caught.
 #[tokio::test]
 async fn panic_during_supervisory_step_is_caught() {
     let bus = InProcessBus::new("test-bus");
@@ -679,9 +676,6 @@ async fn panic_during_supervisory_step_is_caught() {
 
 /// FPA-011: A partition panicking during init() in a supervisory task should be
 /// caught and reported — not crash the task silently.
-///
-/// FAILS: supervisory tasks call partition.init() directly without
-/// fault::safe_init(), so panics kill the tokio task.
 #[tokio::test]
 async fn panic_during_supervisory_init_is_caught() {
     let bus = InProcessBus::new("test-bus");
@@ -734,10 +728,6 @@ async fn panic_during_supervisory_init_is_caught() {
 
 /// FPA-011: A partition whose step() exceeds the 50ms timeout should be
 /// reported as a timeout fault in the supervisory output store.
-///
-/// FAILS: supervisory tasks have no per-invocation timeout enforcement.
-/// The partition sleeps 100ms (exceeding the 50ms step deadline) but the
-/// output is accepted without error.
 #[tokio::test]
 async fn slow_supervisory_step_detected_as_timeout() {
     let bus = InProcessBus::new("test-bus");
@@ -780,10 +770,6 @@ async fn slow_supervisory_step_detected_as_timeout() {
 
 /// FPA-011: A partition whose init() exceeds the 500ms timeout should be
 /// reported as a timeout fault in the supervisory output store.
-///
-/// FAILS: supervisory tasks have no per-invocation timeout enforcement.
-/// The partition sleeps 600ms (exceeding the 500ms init deadline) but the
-/// init completes without error.
 #[tokio::test]
 async fn slow_supervisory_init_detected_as_timeout() {
     let bus = InProcessBus::new("test-bus");

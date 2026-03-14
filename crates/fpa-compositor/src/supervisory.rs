@@ -251,16 +251,39 @@ impl SupervisoryCompositor {
                     }
 
                     // Contribute state — routed through fault wrapper (FPA-011)
-                    if let Ok(value) = fault::safe_contribute_state(partition.as_ref()) {
-                        let mut s = store.lock().unwrap();
-                        s.insert(
-                            partition.id().to_string(),
-                            FreshnessEntry {
-                                value,
-                                updated_at: Instant::now(),
-                                tick,
-                            },
-                        );
+                    match fault::safe_contribute_state(partition.as_ref()) {
+                        Ok(value) => {
+                            let mut s = store.lock().unwrap();
+                            s.insert(
+                                partition.id().to_string(),
+                                FreshnessEntry {
+                                    value,
+                                    updated_at: Instant::now(),
+                                    tick,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            let mut s = store.lock().unwrap();
+                            let mut error_table = toml::map::Map::new();
+                            error_table.insert(
+                                "error".to_string(),
+                                toml::Value::String(e.message.clone()),
+                            );
+                            error_table.insert(
+                                "operation".to_string(),
+                                toml::Value::String("contribute_state".to_string()),
+                            );
+                            s.insert(
+                                partition.id().to_string(),
+                                FreshnessEntry {
+                                    value: toml::Value::Table(error_table),
+                                    updated_at: Instant::now(),
+                                    tick,
+                                },
+                            );
+                            break;
+                        }
                     }
 
                     tokio::time::sleep(step_interval).await;

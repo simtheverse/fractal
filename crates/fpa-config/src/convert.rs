@@ -16,19 +16,50 @@ fn parse_predicate(signal: &str, predicate: &str, value: f64) -> Result<Predicat
     }
 }
 
+/// Convert an [`EventConfig`] into an [`EventDefinition`] using the given scope.
+fn event_definition_from_config(config: &EventConfig, scope: &str) -> Result<EventDefinition, String> {
+    let trigger = match &config.trigger {
+        TriggerConfig::Time { at } => EventTrigger::Time { at: *at },
+        TriggerConfig::Condition {
+            signal,
+            predicate,
+            value,
+        } => EventTrigger::Condition {
+            predicate: parse_predicate(signal, predicate, *value)?,
+        },
+    };
+
+    let action = EventAction {
+        action_id: config.action.clone(),
+        scope: scope.to_string(),
+        parameters: config.parameters.clone(),
+    };
+
+    Ok(EventDefinition {
+        id: config.id.clone(),
+        trigger,
+        action,
+        armed: true,
+    })
+}
+
 /// Convert an [`EventConfig`] to an [`EventDefinition`] with action registry
 /// validation (FPA-029).
 ///
 /// Performs the same structural conversion as `TryFrom<&EventConfig>`, then
 /// validates that the action identifier is registered and usable at the
-/// event's scope. Returns an error if the action is not declared in a
-/// contract crate visible at that scope.
+/// event's scope. `default_scope` is used when the config omits a scope —
+/// callers should pass the scope of the context where the event is defined
+/// (e.g., `"system"` for system-level events, `"system.physics"` for
+/// partition-level events). Returns an error if the action is not declared
+/// in a contract crate visible at that scope.
 pub fn validated_event_definition(
     config: &EventConfig,
     registry: &ActionRegistry,
+    default_scope: &str,
 ) -> Result<EventDefinition, String> {
-    let def = EventDefinition::try_from(config)?;
-    let scope = config.scope.as_deref().unwrap_or_default();
+    let scope = config.scope.as_deref().unwrap_or(default_scope);
+    let def = event_definition_from_config(config, scope)?;
     registry.validate(&def.action.action_id, scope)?;
     Ok(def)
 }
@@ -37,28 +68,7 @@ impl TryFrom<&EventConfig> for EventDefinition {
     type Error = String;
 
     fn try_from(config: &EventConfig) -> Result<Self, Self::Error> {
-        let trigger = match &config.trigger {
-            TriggerConfig::Time { at } => EventTrigger::Time { at: *at },
-            TriggerConfig::Condition {
-                signal,
-                predicate,
-                value,
-            } => EventTrigger::Condition {
-                predicate: parse_predicate(signal, predicate, *value)?,
-            },
-        };
-
-        let action = EventAction {
-            action_id: config.action.clone(),
-            scope: config.scope.clone().unwrap_or_default(),
-            parameters: config.parameters.clone(),
-        };
-
-        Ok(EventDefinition {
-            id: config.id.clone(),
-            trigger,
-            action,
-            armed: true,
-        })
+        let scope = config.scope.as_deref().unwrap_or_default();
+        event_definition_from_config(config, scope)
     }
 }

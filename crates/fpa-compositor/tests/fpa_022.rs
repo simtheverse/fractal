@@ -111,9 +111,6 @@ fn snapshot_contains_time_and_execution_state() {
 /// composition fragments produced by contribute_state(), which always wraps
 /// output in StateContribution envelopes. Loading bare values silently would
 /// bypass freshness metadata and violate the contract boundary.
-///
-/// FAILS: apply_state_fragment() falls through to using the raw value when
-/// StateContribution::from_toml() returns None (compositor.rs:658-659).
 #[test]
 fn load_rejects_bare_values_without_envelope() {
     let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
