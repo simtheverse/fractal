@@ -320,6 +320,79 @@ value = 100.0
     assert_eq!(fired[1].action_id, "activate_cooling");
 }
 
+/// FPA-029: validated_event_definition rejects unregistered actions at config load time.
+#[test]
+fn validated_conversion_rejects_unregistered_action() {
+    use fpa_config::{validated_event_definition, EventConfig};
+    use fpa_events::ActionRegistry;
+    use std::collections::HashMap;
+
+    let mut registry = ActionRegistry::new();
+    registry.register("stop_simulation", "system");
+
+    let config = EventConfig {
+        id: "e1".to_string(),
+        trigger: TriggerConfig::Time { at: 10.0 },
+        action: "bogus_action".to_string(),
+        scope: Some("system".to_string()),
+        parameters: HashMap::new(),
+    };
+
+    let result = validated_event_definition(&config, &registry);
+    assert!(result.is_err(), "unregistered action should be rejected at config load time");
+    assert!(
+        result.unwrap_err().contains("not registered"),
+        "error should explain the action is not registered"
+    );
+}
+
+/// FPA-029: validated_event_definition accepts registered actions.
+#[test]
+fn validated_conversion_accepts_registered_action() {
+    use fpa_config::{validated_event_definition, EventConfig};
+    use fpa_events::ActionRegistry;
+    use std::collections::HashMap;
+
+    let mut registry = ActionRegistry::new();
+    registry.register("stop_simulation", "system");
+
+    let config = EventConfig {
+        id: "timeout".to_string(),
+        trigger: TriggerConfig::Time { at: 10.0 },
+        action: "stop_simulation".to_string(),
+        scope: Some("system".to_string()),
+        parameters: HashMap::new(),
+    };
+
+    let result = validated_event_definition(&config, &registry);
+    assert!(result.is_ok(), "registered action should be accepted");
+}
+
+/// FPA-029: validated_event_definition rejects cross-scope action usage.
+#[test]
+fn validated_conversion_rejects_cross_scope_action() {
+    use fpa_config::{validated_event_definition, EventConfig};
+    use fpa_events::ActionRegistry;
+    use std::collections::HashMap;
+
+    let mut registry = ActionRegistry::new();
+    registry.register("ignite", "system.physics");
+
+    let config = EventConfig {
+        id: "e1".to_string(),
+        trigger: TriggerConfig::Time { at: 5.0 },
+        action: "ignite".to_string(),
+        scope: Some("system.gnc".to_string()),
+        parameters: HashMap::new(),
+    };
+
+    let result = validated_event_definition(&config, &registry);
+    assert!(
+        result.is_err(),
+        "action from system.physics should not be usable at system.gnc"
+    );
+}
+
 /// Fragments without events still parse (backwards compatibility).
 #[test]
 fn fragment_without_events_parses() {

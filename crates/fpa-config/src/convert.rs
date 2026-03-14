@@ -1,7 +1,7 @@
 //! Conversion from configuration types to runtime event definitions.
 
 use crate::fragment::{EventConfig, TriggerConfig};
-use fpa_events::{EventAction, EventDefinition, EventTrigger, Predicate};
+use fpa_events::{ActionRegistry, EventAction, EventDefinition, EventTrigger, Predicate};
 
 /// Parse a predicate string and value into a [`Predicate`] for a given signal.
 ///
@@ -14,6 +14,23 @@ fn parse_predicate(signal: &str, predicate: &str, value: f64) -> Result<Predicat
         "==" | "equal" => Ok(Predicate::Equal { signal: signal.to_string(), threshold: value }),
         other => Err(format!("unknown predicate operator: '{}'", other)),
     }
+}
+
+/// Convert an [`EventConfig`] to an [`EventDefinition`] with action registry
+/// validation (FPA-029).
+///
+/// Performs the same structural conversion as `TryFrom<&EventConfig>`, then
+/// validates that the action identifier is registered and usable at the
+/// event's scope. Returns an error if the action is not declared in a
+/// contract crate visible at that scope.
+pub fn validated_event_definition(
+    config: &EventConfig,
+    registry: &ActionRegistry,
+) -> Result<EventDefinition, String> {
+    let def = EventDefinition::try_from(config)?;
+    let scope = config.scope.as_deref().unwrap_or_default();
+    registry.validate(&def.action.action_id, scope)?;
+    Ok(def)
 }
 
 impl TryFrom<&EventConfig> for EventDefinition {

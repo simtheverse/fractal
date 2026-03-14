@@ -656,7 +656,16 @@ impl Compositor {
                     let state = if let Some(sc) = StateContribution::from_toml(envelope_value) {
                         sc.state
                     } else {
-                        envelope_value.clone()
+                        let pid = partition.id().to_string();
+                        return Err(PartitionError::new(
+                            &pid,
+                            "load",
+                            format!(
+                                "partition '{}' state is not a valid StateContribution envelope \
+                                 (missing state/fresh/age_ms fields)",
+                                pid
+                            ),
+                        ).with_layer_depth(self.layer_depth));
                     };
                     fault::safe_load_state(partition.as_mut(), state)
                         .into_result()

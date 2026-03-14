@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use fpa_bus::{Bus, BusExt, InProcessBus};
 use fpa_contract::{Partition, PartitionError, SharedContext, StateContribution};
 use crate::direct_signal::DirectSignal;
+use crate::fault;
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 
 /// An entry in the output store with freshness tracking.
@@ -171,8 +172,9 @@ impl SupervisoryCompositor {
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let join_handle = tokio::spawn(async move {
-                // Initialize
-                if let Err(e) = partition.init() {
+                // Initialize — routed through fault wrapper for panic catching
+                // and timeout enforcement (FPA-011).
+                if let Err(e) = fault::safe_init(partition.as_mut()).into_result() {
                     // Report init error to the output store
                     let mut s = store.lock().unwrap();
                     let mut error_table = toml::map::Map::new();
@@ -202,14 +204,14 @@ impl SupervisoryCompositor {
                     // Check for shutdown signal (non-blocking)
                     match shutdown_rx.try_recv() {
                         Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                            let _ = partition.shutdown();
+                            let _ = fault::safe_shutdown(partition.as_mut()).into_result();
                             break;
                         }
                         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                     }
 
-                    // Step
-                    if let Err(e) = partition.step(dt) {
+                    // Step — routed through fault wrapper (FPA-011)
+                    if let Err(e) = fault::safe_step(partition.as_mut(), dt).into_result() {
                         // Report step error to the output store
                         let mut s = store.lock().unwrap();
                         let mut error_table = toml::map::Map::new();
@@ -248,8 +250,8 @@ impl SupervisoryCompositor {
                         }
                     }
 
-                    // Contribute state
-                    if let Ok(value) = partition.contribute_state() {
+                    // Contribute state — routed through fault wrapper (FPA-011)
+                    if let Ok(value) = fault::safe_contribute_state(partition.as_ref()) {
                         let mut s = store.lock().unwrap();
                         s.insert(
                             partition.id().to_string(),
@@ -503,7 +505,15 @@ impl Partition for SupervisoryCompositor {
                 let inner = if let Some(sc) = StateContribution::from_toml(value) {
                     sc.state
                 } else {
-                    value.clone()
+                    return Err(self.make_error(
+                        id,
+                        "load_state",
+                        format!(
+                            "partition '{}' state is not a valid StateContribution envelope \
+                             (missing state/fresh/age_ms fields)",
+                            id
+                        ),
+                    ));
                 };
                 store.insert(
                     id.clone(),
