@@ -25,3 +25,15 @@ impl Message for AccumulatorOutput {
     const VERSION: u32 = 1;
     const DELIVERY: DeliverySemantic = DeliverySemantic::LatestValue;
 }
+
+/// Output message from the Doubler partition (contract version 2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DoublerOutput {
+    pub value: f64,
+}
+
+impl Message for DoublerOutput {
+    const NAME: &'static str = "DoublerOutput";
+    const VERSION: u32 = 2;
+    const DELIVERY: DeliverySemantic = DeliverySemantic::LatestValue;
+}

@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fpa_bus::{BusExt, InProcessBus};
-use fpa_contract::{Partition, PartitionError, SharedContext};
+use fpa_bus::{Bus, BusExt, InProcessBus};
+use fpa_contract::{Partition, PartitionError, SharedContext, StateContribution};
+use crate::direct_signal::DirectSignal;
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 
 /// An entry in the output store with freshness tracking.
@@ -43,7 +44,7 @@ pub struct PartitionHandle {
 pub struct SupervisoryCompositor {
     id: String,
     partition_handles: Vec<PartitionHandle>,
-    bus: InProcessBus,
+    bus: Box<dyn Bus>,
     state_machine: StateMachine,
     output_store: Arc<Mutex<HashMap<String, FreshnessEntry>>>,
     heartbeat_timeout: Duration,
@@ -56,6 +57,9 @@ pub struct SupervisoryCompositor {
     partition_intervals: HashMap<String, Duration>,
     /// Tick counter for run_tick.
     tick_count: u64,
+    /// Direct signals collected from inner compositor partitions (FPA-013).
+    /// Shared with spawned tasks so signals propagate through supervisory nesting.
+    emitted_signals: Arc<Mutex<Vec<DirectSignal>>>,
 }
 
 impl SupervisoryCompositor {
@@ -63,10 +67,14 @@ impl SupervisoryCompositor {
     ///
     /// `heartbeat_timeout` controls how long a partition can go without
     /// updating before being considered stale/faulted.
+    ///
+    /// Accepts any `Bus` implementation via `Box<dyn Bus>`, enabling runtime
+    /// transport selection (FPA-004). For convenience with `InProcessBus`,
+    /// use `SupervisoryCompositor::new_default`.
     pub fn new(
         id: impl Into<String>,
         partitions: Vec<Box<dyn Partition>>,
-        bus: InProcessBus,
+        bus: Box<dyn Bus>,
         heartbeat_timeout: Duration,
     ) -> Self {
         Self {
@@ -81,7 +89,21 @@ impl SupervisoryCompositor {
             step_interval: Duration::from_millis(10),
             partition_intervals: HashMap::new(),
             tick_count: 0,
+            emitted_signals: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Create a new supervisory compositor with a default `InProcessBus`.
+    ///
+    /// Convenience constructor for the common case where in-process transport
+    /// is sufficient.
+    pub fn new_default(
+        id: impl Into<String>,
+        partitions: Vec<Box<dyn Partition>>,
+        bus_id: impl Into<String>,
+        heartbeat_timeout: Duration,
+    ) -> Self {
+        Self::new(id, partitions, Box::new(InProcessBus::new(bus_id)), heartbeat_timeout)
     }
 
     /// Set the layer depth for this compositor.
@@ -112,8 +134,8 @@ impl SupervisoryCompositor {
     }
 
     /// Get a reference to the bus.
-    pub fn bus(&self) -> &InProcessBus {
-        &self.bus
+    pub fn bus(&self) -> &dyn Bus {
+        &*self.bus
     }
 
     /// Get a reference to the output store.
@@ -140,6 +162,7 @@ impl SupervisoryCompositor {
         for mut partition in partitions {
             let partition_id = partition.id().to_string();
             let store = Arc::clone(&self.output_store);
+            let signals = Arc::clone(&self.emitted_signals);
             let step_interval = self
                 .partition_intervals
                 .get(&partition_id)
@@ -210,6 +233,21 @@ impl SupervisoryCompositor {
                     }
                     tick += 1;
 
+                    // Collect direct signals from inner compositor partitions (FPA-013)
+                    if let Some(any) = partition.as_any_mut() {
+                        use crate::compositor::Compositor;
+                        let drained = if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
+                            inner_comp.drain_emitted_signals()
+                        } else if let Some(inner_sup) = any.downcast_mut::<SupervisoryCompositor>() {
+                            inner_sup.drain_emitted_signals()
+                        } else {
+                            Vec::new()
+                        };
+                        if !drained.is_empty() {
+                            signals.lock().unwrap().extend(drained);
+                        }
+                    }
+
                     // Contribute state
                     if let Ok(value) = partition.contribute_state() {
                         let mut s = store.lock().unwrap();
@@ -273,20 +311,12 @@ impl SupervisoryCompositor {
             let fresh = age < self.heartbeat_timeout;
             let age_ms = age.as_millis() as u64;
 
-            // Wrap the partition state with freshness metadata
-            let mut meta_table = toml::map::Map::new();
-            meta_table.insert("state".to_string(), entry.value.clone());
-            meta_table.insert("fresh".to_string(), toml::Value::Boolean(fresh));
-            meta_table.insert(
-                "age_ms".to_string(),
-                toml::Value::Integer(age_ms as i64),
-            );
-            meta_table.insert(
-                "tick".to_string(),
-                toml::Value::Integer(entry.tick as i64),
-            );
-
-            table.insert(id.clone(), toml::Value::Table(meta_table));
+            let envelope = StateContribution {
+                state: entry.value.clone(),
+                fresh,
+                age_ms,
+            };
+            table.insert(id.clone(), envelope.to_toml());
         }
 
         drop(store);
@@ -381,18 +411,23 @@ impl SupervisoryCompositor {
             let fresh = age < self.heartbeat_timeout;
             let age_ms = age.as_millis() as u64;
 
-            let mut meta_table = toml::map::Map::new();
-            meta_table.insert("state".to_string(), entry.value.clone());
-            meta_table.insert("fresh".to_string(), toml::Value::Boolean(fresh));
-            meta_table.insert(
-                "age_ms".to_string(),
-                toml::Value::Integer(age_ms as i64),
-            );
-
-            table.insert(id.clone(), toml::Value::Table(meta_table));
+            let envelope = StateContribution {
+                state: entry.value.clone(),
+                fresh,
+                age_ms,
+            };
+            table.insert(id.clone(), envelope.to_toml());
         }
 
         Ok(toml::Value::Table(table))
+    }
+
+    /// Drain and return all direct signals collected from inner compositor
+    /// partitions (FPA-013). Signals accumulate in the shared store as spawned
+    /// tasks step their partitions; this method transfers them out for
+    /// propagation to the outer layer.
+    pub fn drain_emitted_signals(&mut self) -> Vec<DirectSignal> {
+        std::mem::take(&mut *self.emitted_signals.lock().unwrap())
     }
 
     fn make_error(&self, partition_id: &str, operation: &str, message: String) -> PartitionError {
@@ -420,8 +455,15 @@ impl Partition for SupervisoryCompositor {
     }
 
     fn shutdown(&mut self) -> Result<(), PartitionError> {
-        // Synchronous shutdown: send signals but don't await join handles.
-        // Tasks will terminate on their own after receiving the signal.
+        // Synchronous shutdown signals task termination but does NOT confirm
+        // completion. This is intentional — it surfaces a spec finding:
+        //
+        // FPA-009 says "the compositor controls when [partitions] must stop"
+        // but the synchronous Partition trait can only SIGNAL shutdown, not
+        // CONFIRM it, when the partition runs async tasks. Use
+        // `async_shutdown()` for confirmed shutdown with task join.
+        //
+        // See FPA-009 in SPECIFICATION.md for the full spec text on this.
         self.state_machine
             .request_transition(TransitionRequest {
                 requested_by: self.id.clone(),
@@ -429,10 +471,11 @@ impl Partition for SupervisoryCompositor {
             })
             .map_err(|e| self.make_error("compositor", "shutdown", e.to_string()))?;
 
+        // Send shutdown signals to all partition tasks (fire-and-forget).
         let handles = std::mem::take(&mut self.partition_handles);
         for handle in handles {
             let _ = handle.shutdown_tx.send(());
-            // Don't await - tasks will terminate on their own
+            // JoinHandles are dropped — tasks will complete asynchronously.
         }
 
         self.state_machine
@@ -455,10 +498,16 @@ impl Partition for SupervisoryCompositor {
         if let Some(table) = state.as_table() {
             let mut store = self.output_store.lock().unwrap();
             for (id, value) in table {
+                // Unwrap StateContribution envelope if present
+                let inner = if let Some(sc) = StateContribution::from_toml(value) {
+                    sc.state
+                } else {
+                    value.clone()
+                };
                 store.insert(
                     id.clone(),
                     FreshnessEntry {
-                        value: value.clone(),
+                        value: inner,
                         updated_at: Instant::now(),
                         tick: 0,
                     },
@@ -466,5 +515,9 @@ impl Partition for SupervisoryCompositor {
             }
         }
         Ok(())
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }

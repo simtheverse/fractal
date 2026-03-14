@@ -3,6 +3,7 @@
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// Dump invokes contribute_state() on all partitions.
 #[test]
@@ -12,7 +13,7 @@ fn dump_invokes_contribute_state_on_all_partitions() {
         Box::new(Counter::new("b")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     compositor.run_tick(1.0).unwrap();
@@ -21,21 +22,11 @@ fn dump_invokes_contribute_state_on_all_partitions() {
     let snapshot = compositor.dump().unwrap();
     let partitions_table = snapshot.get("partitions").unwrap().as_table().unwrap();
 
-    // Both partitions should have contributed state with count = 2
-    let a_count = partitions_table
-        .get("a")
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
-    let b_count = partitions_table
-        .get("b")
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    // Both partitions should have contributed state with count = 2 (wrapped in StateContribution)
+    let a_sc = StateContribution::from_toml(partitions_table.get("a").unwrap()).unwrap();
+    let a_count = a_sc.state.get("count").unwrap().as_integer().unwrap();
+    let b_sc = StateContribution::from_toml(partitions_table.get("b").unwrap()).unwrap();
+    let b_count = b_sc.state.get("count").unwrap().as_integer().unwrap();
 
     assert_eq!(a_count, 2);
     assert_eq!(b_count, 2);
@@ -44,13 +35,16 @@ fn dump_invokes_contribute_state_on_all_partitions() {
 /// Load restores state via load_state().
 #[test]
 fn load_restores_state_via_load_state() {
-    // Build a state fragment manually
+    // Build a state fragment manually (using StateContribution envelope format)
     let state: toml::Value = toml::from_str(
         r#"
         [system]
         tick_count = 10
 
         [partitions.counter]
+        fresh = true
+        age_ms = 0
+        [partitions.counter.state]
         count = 7
         "#,
     )
@@ -60,24 +54,19 @@ fn load_restores_state_via_load_state() {
         Box::new(Counter::new("counter")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     compositor.load(state).unwrap();
 
     assert_eq!(compositor.tick_count(), 10);
 
-    // Verify partition state was restored
+    // Verify partition state was restored (dump wraps in StateContribution)
     let snapshot = compositor.dump().unwrap();
-    let count = snapshot
-        .get("partitions")
-        .unwrap()
-        .get("counter")
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let counter_sc = StateContribution::from_toml(
+        snapshot.get("partitions").unwrap().get("counter").unwrap()
+    ).unwrap();
+    let count = counter_sc.state.get("count").unwrap().as_integer().unwrap();
     assert_eq!(count, 7);
 }
 
@@ -89,7 +78,7 @@ fn round_trip_identity() {
         Box::new(Counter::new("counter")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut comp1 = Compositor::new(partitions, bus);
+    let mut comp1 = Compositor::new(partitions, Box::new(bus));
 
     comp1.init().unwrap();
     for _ in 0..5 {
@@ -103,7 +92,7 @@ fn round_trip_identity() {
         Box::new(Counter::new("counter")),
     ];
     let bus2 = InProcessBus::new("test-bus-2");
-    let mut comp2 = Compositor::new(partitions2, bus2);
+    let mut comp2 = Compositor::new(partitions2, Box::new(bus2));
 
     comp2.init().unwrap();
     comp2.load(snapshot.clone()).unwrap();
@@ -128,7 +117,7 @@ fn load_while_running_succeeds_in_prototype() {
         Box::new(Counter::new("counter")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
 
     compositor.init().unwrap();
     // Compositor is now in Running state
@@ -145,6 +134,9 @@ fn load_while_running_succeeds_in_prototype() {
         tick_count = 42
 
         [partitions.counter]
+        fresh = true
+        age_ms = 0
+        [partitions.counter.state]
         count = 10
         "#,
     )
@@ -166,7 +158,7 @@ fn round_trip_with_continued_execution() {
         Box::new(Counter::new("counter")),
     ];
     let bus_a = InProcessBus::new("bus-a");
-    let mut comp_a = Compositor::new(partitions_a, bus_a);
+    let mut comp_a = Compositor::new(partitions_a, Box::new(bus_a));
 
     comp_a.init().unwrap();
     for _ in 0..n {
@@ -180,7 +172,7 @@ fn round_trip_with_continued_execution() {
         Box::new(Counter::new("counter")),
     ];
     let bus_a2 = InProcessBus::new("bus-a2");
-    let mut comp_a2 = Compositor::new(partitions_a2, bus_a2);
+    let mut comp_a2 = Compositor::new(partitions_a2, Box::new(bus_a2));
 
     comp_a2.init().unwrap();
     comp_a2.load(snapshot).unwrap();
@@ -194,7 +186,7 @@ fn round_trip_with_continued_execution() {
         Box::new(Counter::new("counter")),
     ];
     let bus_b = InProcessBus::new("bus-b");
-    let mut comp_b = Compositor::new(partitions_b, bus_b);
+    let mut comp_b = Compositor::new(partitions_b, Box::new(bus_b));
 
     comp_b.init().unwrap();
     for _ in 0..(n + m) {

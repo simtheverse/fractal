@@ -384,15 +384,15 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 
 > Depends on: Tracks K and L (needs both multi-rate and supervisory to compose).
 
-- [ ] **4M.1** Write failing tests in `crates/fpa-compositor/tests/`:
+- [x] **4M.1** Write failing tests in `crates/fpa-compositor/tests/`:
   - Lock-step outer compositor embeds supervisory inner compositor — works without modification
   - Supervisory outer embeds lock-step inner — works without modification
   - Freshness metadata correctly indicates stale data at strategy boundary
-- [ ] **4M.2** Implement strategy adapter in compositor:
+- [x] **4M.2** Implement strategy adapter in compositor:
   - When inner strategy differs from outer, compositor adapts at boundary
   - Present expected interface to outer layer
   - Freshness metadata attached when output is from cache
-- [ ] **4M.3** All cross-strategy tests pass
+- [x] **4M.3** All cross-strategy tests pass
 
 ### Track H-validation: Documentation Structure Validation
 
@@ -402,12 +402,12 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 > recursive docs structure). Builds on the structural validation test from
 > Phase 1 Track H-structure.
 
-- [ ] **4H.1** Extend structural validation tests:
+- [x] **4H.1** Extend structural validation tests:
   - Verify bidirectional traceability: every requirement in FPA-SRS-000 is referenced by at least one crate-level requirement
   - Verify recursive structure: sub-partitions (from multi-layer) maintain their own `docs/` and `SPECIFICATION.md`
   - Verify test file naming matches requirement IDs across all crates
   - Check for orphan requirements (no parent trace)
-- [ ] **4H.2** All structure validation tests pass across the full workspace
+- [x] **4H.2** All structure validation tests pass across the full workspace
 
 ### Track M2: Runtime Transport in Compositor
 
@@ -415,10 +415,10 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 
 > Depends on: Phase 3b (bus redesign must be complete).
 
-- [ ] **4M2.1** Change `Compositor` and `SupervisoryCompositor` to accept `Box<dyn Bus>` instead of concrete `InProcessBus`
-- [ ] **4M2.2** Update compositor construction to receive bus via dependency injection
-- [ ] **4M2.3** Test: same compositor config runs with `InProcessBus`, `AsyncBus`, `NetworkBus` — identical results
-- [ ] **4M2.4** All runtime transport tests pass
+- [x] **4M2.1** Change `Compositor` and `SupervisoryCompositor` to accept `Box<dyn Bus>` instead of concrete `InProcessBus`
+- [x] **4M2.2** Update compositor construction to receive bus via dependency injection
+- [x] **4M2.3** Test: same compositor config runs with `InProcessBus`, `AsyncBus`, `NetworkBus` — identical results
+- [x] **4M2.4** All runtime transport tests pass
 
 ### Track N: Contract Test Reusability & Reference Data
 
@@ -427,25 +427,41 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 > Can start once Phase 2b is complete (single-layer compositor with tests).
 > Does not depend on Phase 3 tracks.
 
-- [ ] **4N.1** Write failing tests:
+- [x] **4N.1** Write failing tests:
   - `fpa_032.rs`: Same contract test suite runs against alternative impl without modification
   - `fpa_036.rs`: Contract tests assert output properties, not exact values; canonical inputs in contract's test module; tolerances stated in contract
   - `fpa_037.rs`: Compositor tests assert compositional properties (delivery, conservation, ordering); don't fail when partition impl swapped
   - `fpa_039.rs`: Contract version N has own reference data; impl targeting v N unaffected by v N+1
-- [ ] **4N.2** Implement contract versioning:
+- [x] **4N.2** Implement contract versioning:
   - Version field on contract trait
   - Version-scoped canonical inputs and output properties
   - Alternative impl targets specific version
-- [ ] **4N.3** Verify: swap partition impl → contract tests still pass without modification
-- [ ] **4N.4** Verify: swap partition impl → compositor tests still pass (compositional properties stable)
-- [ ] **4N.5** All reference data tests pass
+- [x] **4N.3** Verify: swap partition impl → contract tests still pass without modification
+- [x] **4N.4** Verify: swap partition impl → compositor tests still pass (compositional properties stable)
+- [x] **4N.5** All reference data tests pass
 
 ---
 
 ## Phase 5 — System Test Infrastructure
 
 > Depends on: Phase 4 (all tracks).
-> Two parallel tracks.
+> Three parallel tracks.
+
+### Track J2: Network Transport Serialization
+
+**Requirements covered:** FPA-004 (network transport — serialization gap)
+
+> Phase 3 Track J implemented `NetworkBus` as a structural stub (clone-based,
+> same as `InProcessBus`). Serialization via `serde` was not implemented despite
+> being listed in 3J.1. This track completes the network transport implementation.
+> See `docs/feedback/FPA-004-network.md` for the proposed `NetworkMessage` subtrait
+> approach.
+
+- [ ] **5J2.1** Implement `NetworkMessage` subtrait (or equivalent) adding `Serialize + Deserialize` bounds without modifying the base `Message` trait
+- [ ] **5J2.2** Update `NetworkBus` to serialize/deserialize messages to bytes instead of cloning
+- [ ] **5J2.3** Test: messages round-trip through serialization with identical content
+- [ ] **5J2.4** Test: `NetworkBus` with serialization produces identical final state to `InProcessBus` (non-vacuous verification)
+- [ ] **5J2.5** All network serialization tests pass
 
 ### Track O: System Test Harness
 
@@ -527,6 +543,7 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
 - [ ] **7.2** Final spec feedback pass — most feedback addressed in Phase 3b; review any remaining items from Phases 4–6
 - [ ] **7.3** List open questions and areas for further prototyping
 - [ ] **7.4** Architecture decision records for any spec changes surfaced during prototyping
+- [ ] **7.5** Complete per-crate Diataxis documentation structure (`docs/design/`, `docs/tutorials/`, `docs/how-to/`, `docs/reference/`) — deferred from Phase 4 M1
 
 ---
 
@@ -560,7 +577,8 @@ Phase 4  ┌─ Track M (Cross-strategy; needs K+L) ──► │
          ├─ Track H-validation (Full docs check) ──► ├──►
          └─ Track N (Reference data; needs 2b+) ───► │
                                                       │
-Phase 5  ── Track O (System tests) ────────────────► ├──►
+Phase 5  ┌─ Track J2 (Network serialization) ──────► │
+         └─ Track O (System tests) ────────────────► ├──►
                                                       │
 Phase 6  ┌─ Track P (Replaceability eval) ─────────► │
          ├─ Track Q (Determinism eval) ────────────► ├──►

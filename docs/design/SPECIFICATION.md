@@ -440,6 +440,17 @@ before any `step()`; `step(dt)` shall be called with `dt` equal to the elapsed t
 the previous step invocation; `shutdown()` shall be called after all steps complete;
 `load_state()` shall only be called when no `step()` is in flight.
 
+Under supervisory coordination, the synchronous `shutdown()` method on the Partition
+trait constitutes a shutdown *signal* — it instructs sub-partitions to stop but does not
+guarantee that all asynchronous work has ceased by the time it returns. This is inherent
+to the model: sub-partitions running on separate tasks, processes, or nodes cannot be
+synchronously joined through a synchronous trait method. Shutdown *confirmation* — the
+guarantee that sub-partitions have actually stopped — requires a mechanism outside the
+synchronous trait, such as an async shutdown path or the compositor's existing fault
+detection mechanisms (heartbeat expiry, connection state). The compositor retains
+shutdown authority in both cases: it decides *when* to signal shutdown, and it detects
+*whether* sub-partitions have actually stopped.
+
 The execution strategy (lock-step, multi-rate, supervisory) is a compositor concern and
 is runtime-configurable. The Partition trait is strategy-neutral — it defines the
 lifecycle contract without prescribing how the compositor schedules invocations.
@@ -557,6 +568,10 @@ to have *timed out* on a given trait method call if that call does not return wi
 per-invocation elapsed-time deadline enforced by the compositor: `step()` and
 `contribute_state()` calls shall each have a maximum duration of 50 ms, and `init()`,
 `load_state()`, and `shutdown()` calls shall each have a maximum duration of 500 ms.
+These deadlines apply to the trait method call returning, not to the guarantee that all
+work initiated by the sub-partition has ceased. Under supervisory coordination, a
+sub-partition's `shutdown()` may return promptly after signaling its internal tasks to
+stop, while those tasks complete asynchronously (see FPA-009).
 Implementations may enforce stricter (shorter) per-invocation deadlines than these
 maxima but shall not use longer deadlines.
 These deadlines are per call (not per tick) and are measured using a

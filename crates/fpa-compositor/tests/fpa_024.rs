@@ -12,7 +12,7 @@ fn setup_compositor() -> Compositor {
     let partitions: Vec<Box<dyn fpa_contract::Partition>> =
         vec![Box::new(Counter::new("counter"))];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::new(partitions, Box::new(bus));
     compositor.init().unwrap();
     compositor
 }

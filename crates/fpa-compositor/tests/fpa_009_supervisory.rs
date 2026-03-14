@@ -49,7 +49,7 @@ async fn partition_runs_own_processing_loop() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        bus,
+        Box::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -86,7 +86,7 @@ async fn lifecycle_management_init_and_shutdown() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        bus,
+        Box::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -153,7 +153,7 @@ async fn partition_marked_fresh_when_recently_updated() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        bus,
+        Box::new(bus),
         Duration::from_secs(1), // 1s timeout - plenty of time
     )
     .with_step_interval(Duration::from_millis(5));
@@ -194,7 +194,7 @@ async fn partition_marked_stale_after_heartbeat_timeout() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        bus,
+        Box::new(bus),
         Duration::from_millis(30), // 30ms timeout
     )
     .with_step_interval(Duration::from_millis(5));
@@ -237,7 +237,7 @@ async fn run_tick_publishes_shared_context_with_freshness() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        bus,
+        Box::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -259,11 +259,10 @@ async fn run_tick_publishes_shared_context_with_freshness() {
         .and_then(|v| v.as_table())
         .expect("should have counter-1");
 
-    // Should have freshness metadata
+    // Should have freshness metadata (StateContribution envelope)
     assert!(counter_entry.contains_key("fresh"));
     assert!(counter_entry.contains_key("age_ms"));
     assert!(counter_entry.contains_key("state"));
-    assert!(counter_entry.contains_key("tick"));
 
     // Should be fresh
     assert_eq!(
@@ -284,7 +283,7 @@ async fn multiple_partitions_run_independently() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter_a), Box::new(counter_b)],
-        bus,
+        Box::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -328,7 +327,7 @@ async fn supervisory_compositor_implements_partition_trait() {
     let mut compositor = SupervisoryCompositor::new(
         "test-supervisory",
         vec![Box::new(counter)],
-        bus,
+        Box::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -379,7 +378,7 @@ async fn stale_partitions_detected() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        bus,
+        Box::new(bus),
         Duration::from_millis(30),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -413,7 +412,7 @@ async fn per_partition_step_interval() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(fast_counter), Box::new(slow_counter)],
-        bus,
+        Box::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -494,7 +493,7 @@ async fn partition_step_error_reported_to_store() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(failing)],
-        bus,
+        Box::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));

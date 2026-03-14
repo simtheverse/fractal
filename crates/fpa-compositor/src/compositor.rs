@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use fpa_bus::{BusExt, InProcessBus};
-use fpa_contract::{Partition, PartitionError};
+use fpa_bus::{Bus, BusExt, InProcessBus};
+use fpa_contract::{Partition, PartitionError, StateContribution};
 use fpa_events::EventEngine;
 
 // Re-export SharedContext so downstream code importing from compositor::SharedContext still works.
@@ -40,7 +40,7 @@ pub struct Compositor {
     /// Unique identifier for this compositor instance.
     id: String,
     partitions: Vec<Box<dyn Partition>>,
-    bus: InProcessBus,
+    bus: Box<dyn Bus>,
     state_machine: StateMachine,
     double_buffer: DoubleBuffer,
     /// Fallback partitions keyed by the ID of the partition they replace.
@@ -68,7 +68,11 @@ pub struct Compositor {
 
 impl Compositor {
     /// Create a new compositor with the given partitions and bus.
-    pub fn new(partitions: Vec<Box<dyn Partition>>, bus: InProcessBus) -> Self {
+    ///
+    /// Accepts any `Bus` implementation via `Box<dyn Bus>`, enabling runtime
+    /// transport selection (FPA-004). For convenience with `InProcessBus`,
+    /// use `Compositor::new_default`.
+    pub fn new(partitions: Vec<Box<dyn Partition>>, bus: Box<dyn Bus>) -> Self {
         Self {
             id: "compositor".to_string(),
             partitions,
@@ -87,6 +91,14 @@ impl Compositor {
             direct_signal_registry: DirectSignalRegistry::new(),
             emitted_signals: Vec::new(),
         }
+    }
+
+    /// Create a new compositor with a default `InProcessBus`.
+    ///
+    /// Convenience constructor for the common case where in-process transport
+    /// is sufficient.
+    pub fn new_default(partitions: Vec<Box<dyn Partition>>, bus_id: impl Into<String>) -> Self {
+        Self::new(partitions, Box::new(InProcessBus::new(bus_id)))
     }
 
     /// Set the compositor ID.
@@ -177,6 +189,11 @@ impl Compositor {
         self.emitted_signals.clear();
     }
 
+    /// Drain and return all emitted direct signals, leaving the internal list empty.
+    pub fn drain_emitted_signals(&mut self) -> Vec<DirectSignal> {
+        std::mem::take(&mut self.emitted_signals)
+    }
+
     /// Submit a transition request from an inner partition (FPA-010).
     ///
     /// The request is subject to the compositor's relay policy before
@@ -250,8 +267,8 @@ impl Compositor {
     }
 
     /// Get a reference to the bus.
-    pub fn bus(&self) -> &InProcessBus {
-        &self.bus
+    pub fn bus(&self) -> &dyn Bus {
+        &*self.bus
     }
 
     /// Get a reference to the double buffer.
@@ -371,7 +388,12 @@ impl Compositor {
             // Collect output after all sub-steps (including fallback's remaining steps)
             let state = fault::safe_contribute_state(self.partitions[i].as_ref())
                 .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-            self.double_buffer.write(&partition_id, state);
+            let envelope = StateContribution {
+                state,
+                fresh: true,
+                age_ms: 0,
+            };
+            self.double_buffer.write(&partition_id, envelope.to_toml());
 
             i += 1;
         }
@@ -498,6 +520,9 @@ impl Compositor {
                 if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
                     let signals = std::mem::take(&mut inner_comp.emitted_signals);
                     self.emitted_signals.extend(signals);
+                } else if let Some(inner_sup) = any.downcast_mut::<crate::supervisory::SupervisoryCompositor>() {
+                    let signals = inner_sup.drain_emitted_signals();
+                    self.emitted_signals.extend(signals);
                 }
             }
         }
@@ -506,11 +531,25 @@ impl Compositor {
     /// Build a signal map from the read buffer (pre-step snapshot).
     ///
     /// Extracts numeric values from partition state tables, using the format
-    /// `partition_id.key` as the signal name.
+    /// `partition_id.key` as the signal name. Values are unwrapped from the
+    /// `StateContribution` envelope — signals come from the inner `state` key.
     fn build_signals(&self) -> HashMap<String, f64> {
         let mut signals = HashMap::new();
         for (id, value) in self.double_buffer.read_all() {
-            if let Some(table) = value.as_table() {
+            // Navigate the StateContribution envelope by reference to avoid
+            // cloning the entire state tree. Validate the full envelope shape
+            // (state + fresh bool + age_ms int) to avoid misinterpreting a
+            // partition state that happens to contain a "state" field.
+            let inner = value
+                .as_table()
+                .filter(|t| {
+                    t.contains_key("state")
+                        && t.get("fresh").is_some_and(|v| v.is_bool())
+                        && t.get("age_ms").is_some_and(|v| v.is_integer())
+                })
+                .and_then(|t| t.get("state"))
+                .unwrap_or(value);
+            if let Some(table) = inner.as_table() {
                 for (key, val) in table {
                     if let Some(f) = val.as_float() {
                         signals.insert(format!("{}.{}", id, key), f);
@@ -529,7 +568,12 @@ impl Compositor {
         for partition in &self.partitions {
             let state = fault::safe_contribute_state(partition.as_ref())
                 .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-            partitions.insert(partition.id().to_string(), state);
+            let envelope = StateContribution {
+                state,
+                fresh: true,
+                age_ms: 0,
+            };
+            partitions.insert(partition.id().to_string(), envelope.to_toml());
         }
         let mut root = toml::map::Map::new();
         root.insert("partitions".to_string(), toml::Value::Table(partitions));
@@ -568,8 +612,14 @@ impl Compositor {
         // Extract partitions section
         if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
             for partition in &mut self.partitions {
-                if let Some(state) = partitions.get(partition.id()) {
-                    fault::safe_load_state(partition.as_mut(), state.clone())
+                if let Some(envelope_value) = partitions.get(partition.id()) {
+                    // Unwrap StateContribution envelope to get the inner state
+                    let state = if let Some(sc) = StateContribution::from_toml(envelope_value) {
+                        sc.state
+                    } else {
+                        envelope_value.clone()
+                    };
+                    fault::safe_load_state(partition.as_mut(), state)
                         .into_result()
                         .map_err(|e| e.with_layer_depth(self.layer_depth))?;
                 }
