@@ -24,18 +24,6 @@ fn contract_versions_are_distinct() {
     assert_ne!(ContractVersion::V1, ContractVersion::V2);
 }
 
-/// Contract version V1 is distinct and identifiable.
-#[test]
-fn v1_has_version_number_1() {
-    assert_eq!(ContractVersion::V1, ContractVersion::V1);
-}
-
-/// Contract version V2 is distinct and identifiable.
-#[test]
-fn v2_has_version_number_2() {
-    assert_eq!(ContractVersion::V2, ContractVersion::V2);
-}
-
 // ---------------------------------------------------------------------------
 // Message types declare their contract version
 // ---------------------------------------------------------------------------

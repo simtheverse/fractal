@@ -236,11 +236,15 @@ impl SupervisoryCompositor {
                     // Collect direct signals from inner compositor partitions (FPA-013)
                     if let Some(any) = partition.as_any_mut() {
                         use crate::compositor::Compositor;
-                        if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
-                            let drained = inner_comp.drain_emitted_signals();
-                            if !drained.is_empty() {
-                                signals.lock().unwrap().extend(drained);
-                            }
+                        let drained = if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
+                            inner_comp.drain_emitted_signals()
+                        } else if let Some(inner_sup) = any.downcast_mut::<SupervisoryCompositor>() {
+                            inner_sup.drain_emitted_signals()
+                        } else {
+                            Vec::new()
+                        };
+                        if !drained.is_empty() {
+                            signals.lock().unwrap().extend(drained);
                         }
                     }
 
