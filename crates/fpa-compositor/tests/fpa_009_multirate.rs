@@ -3,6 +3,8 @@
 //! Verifies that partitions can run at different rates within the same compositor.
 //! A partition with rate 4 steps 4 times per outer tick (with dt/4 each sub-step).
 
+use std::sync::Arc;
+
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::multi_rate::RateConfig;
@@ -17,7 +19,7 @@ fn fast_partition_steps_4x_per_slow_partition_1x() {
         Box::new(Counter::new("slow")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let mut rate_config = RateConfig::new();
     rate_config.set_rate("fast", 4);
@@ -49,7 +51,7 @@ fn multi_rate_accumulates_over_multiple_ticks() {
         Box::new(Counter::new("slow")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let mut rate_config = RateConfig::new();
     rate_config.set_rate("fast", 4);
@@ -81,7 +83,7 @@ fn shared_context_reflects_final_state() {
         Box::new(Counter::new("slow")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let mut rate_config = RateConfig::new();
     rate_config.set_rate("fast", 4);
@@ -129,7 +131,7 @@ fn multi_rate_dt_is_divided_correctly() {
         Box::new(Accumulator::new("acc")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let mut rate_config = RateConfig::new();
     rate_config.set_rate("acc", 4);
@@ -233,14 +235,14 @@ fn fallback_completes_remaining_sub_steps() {
         Box::new(FailAfterN::new("fragile", 3)),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let mut rate_config = RateConfig::new();
     rate_config.set_rate("fragile", 4);
     compositor.set_rate_config(rate_config);
 
     // Register a Counter as fallback
-    compositor.register_fallback("fragile", Box::new(Counter::new("fragile")));
+    compositor.register_fallback("fragile", Box::new(Counter::new("fragile"))).unwrap();
 
     compositor.init().unwrap();
     compositor.run_tick(1.0).unwrap();
@@ -268,7 +270,7 @@ fn non_power_of_two_rate_divides_dt_correctly() {
         Box::new(Accumulator::new("acc3")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let mut rate_config = RateConfig::new();
     rate_config.set_rate("acc3", 3);
@@ -299,7 +301,7 @@ fn mixed_rates_in_same_compositor() {
         Box::new(Accumulator::new("a3")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let mut rate_config = RateConfig::new();
     rate_config.set_rate("r2", 2);

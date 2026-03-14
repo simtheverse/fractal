@@ -77,7 +77,7 @@ async fn partition_runs_own_processing_loop() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -114,7 +114,7 @@ async fn lifecycle_management_init_and_shutdown() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -181,7 +181,7 @@ async fn partition_marked_fresh_when_recently_updated() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1), // 1s timeout - plenty of time
     )
     .with_step_interval(Duration::from_millis(5));
@@ -222,7 +222,7 @@ async fn partition_marked_stale_after_heartbeat_timeout() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_millis(30), // 30ms timeout
     )
     .with_step_interval(Duration::from_millis(5));
@@ -265,7 +265,7 @@ async fn run_tick_publishes_shared_context_with_freshness() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -311,7 +311,7 @@ async fn multiple_partitions_run_independently() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter_a), Box::new(counter_b)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -355,7 +355,7 @@ async fn supervisory_compositor_implements_partition_trait() {
     let mut compositor = SupervisoryCompositor::new(
         "test-supervisory",
         vec![Box::new(counter)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -411,7 +411,7 @@ async fn stale_partitions_detected() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(counter)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_millis(30),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -445,7 +445,7 @@ async fn per_partition_step_interval() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(fast_counter), Box::new(slow_counter)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -526,7 +526,7 @@ async fn partition_step_error_reported_to_store() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(failing)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -649,7 +649,7 @@ async fn panic_during_supervisory_step_is_caught() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(panicker)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -690,7 +690,7 @@ async fn panic_during_supervisory_init_is_caught() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(panicker)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -730,7 +730,7 @@ async fn slow_supervisory_step_detected_as_timeout() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(slowpoke)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -768,7 +768,7 @@ async fn slow_supervisory_init_detected_as_timeout() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(slowpoke)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -835,7 +835,7 @@ async fn supervisory_error_includes_partition_id_and_operation() {
     let mut compositor = SupervisoryCompositor::new(
         "test",
         vec![Box::new(partition)],
-        Box::new(bus),
+        Arc::new(bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));

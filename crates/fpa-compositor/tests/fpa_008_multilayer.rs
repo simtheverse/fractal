@@ -3,6 +3,8 @@
 //! Each compositor owns its own bus. When a compositor is nested inside another,
 //! the inner bus is distinct from the outer bus.
 
+use std::sync::Arc;
+
 use fpa_bus::{Bus, BusExt, BusReader, InProcessBus};
 use fpa_compositor::compositor::{Compositor, SharedContext};
 use fpa_contract::test_support::Counter;
@@ -16,7 +18,7 @@ fn inner_bus_messages_not_visible_on_outer_bus() {
         Box::new(Counter::new("b1")),
     ];
     let inner_bus = InProcessBus::new("layer-1-bus");
-    let inner = Compositor::new(inner_partitions, Box::new(inner_bus))
+    let inner = Compositor::new(inner_partitions, Arc::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -31,7 +33,7 @@ fn inner_bus_messages_not_visible_on_outer_bus() {
     // (so we can observe what gets published)
     let mut outer_reader = outer_bus.subscribe::<SharedContext>();
 
-    let mut outer = Compositor::new(outer_partitions, Box::new(outer_bus))
+    let mut outer = Compositor::new(outer_partitions, Arc::new(outer_bus))
         .with_id("orchestrator");
 
     outer.init().unwrap();
@@ -72,7 +74,7 @@ fn bus_ids_are_distinct() {
     ];
     let inner_bus = InProcessBus::new("layer-1-bus");
     let inner_bus_id = inner_bus.id().to_string();
-    let inner = Compositor::new(inner_partitions, Box::new(inner_bus))
+    let inner = Compositor::new(inner_partitions, Arc::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -83,7 +85,7 @@ fn bus_ids_are_distinct() {
     let outer_bus = InProcessBus::new("layer-0-bus");
     let outer_bus_id = outer_bus.id().to_string();
 
-    let _outer = Compositor::new(outer_partitions, Box::new(outer_bus))
+    let _outer = Compositor::new(outer_partitions, Arc::new(outer_bus))
         .with_id("orchestrator");
 
     assert_ne!(
@@ -102,7 +104,7 @@ fn inner_shared_context_does_not_appear_on_outer_bus() {
         Box::new(Counter::new("b1")),
     ];
     let inner_bus = InProcessBus::new("layer-1-bus");
-    let inner = Compositor::new(inner_partitions, Box::new(inner_bus))
+    let inner = Compositor::new(inner_partitions, Arc::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -114,7 +116,7 @@ fn inner_shared_context_does_not_appear_on_outer_bus() {
     let outer_bus = InProcessBus::new("layer-0-bus");
     let mut outer_reader = outer_bus.subscribe::<SharedContext>();
 
-    let mut outer = Compositor::new(outer_partitions, Box::new(outer_bus))
+    let mut outer = Compositor::new(outer_partitions, Arc::new(outer_bus))
         .with_id("orchestrator");
 
     outer.init().unwrap();
@@ -155,7 +157,7 @@ fn inner_and_outer_tick_counts_independent() {
         Box::new(Counter::new("b1")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let inner = Compositor::new(inner_partitions, Box::new(inner_bus))
+    let inner = Compositor::new(inner_partitions, Arc::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -164,7 +166,7 @@ fn inner_and_outer_tick_counts_independent() {
         Box::new(inner),
     ];
     let outer_bus = InProcessBus::new("outer-bus");
-    let mut outer = Compositor::new(outer_partitions, Box::new(outer_bus))
+    let mut outer = Compositor::new(outer_partitions, Arc::new(outer_bus))
         .with_id("orchestrator");
 
     outer.init().unwrap();

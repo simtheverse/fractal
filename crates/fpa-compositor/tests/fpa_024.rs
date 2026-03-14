@@ -1,6 +1,7 @@
 //! Tests for FPA-024: Event Engine integration in Compositor.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
@@ -12,7 +13,7 @@ fn setup_compositor() -> Compositor {
     let partitions: Vec<Box<dyn fpa_contract::Partition>> =
         vec![Box::new(Counter::new("counter"))];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
     compositor.init().unwrap();
     compositor
 }

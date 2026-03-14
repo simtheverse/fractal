@@ -53,7 +53,7 @@ async fn lockstep_outer_embeds_supervisory_inner() {
     let inner = SupervisoryCompositor::new(
         "supervisory-inner",
         vec![Box::new(inner_counter)],
-        Box::new(inner_bus),
+        Arc::new(inner_bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(5));
@@ -69,7 +69,7 @@ async fn lockstep_outer_embeds_supervisory_inner() {
             Box::new(outer_counter),
             Box::new(inner),
         ],
-        Box::new(outer_bus),
+        Arc::new(outer_bus),
     )
     .with_id("lockstep-outer");
 
@@ -154,7 +154,7 @@ async fn supervisory_outer_embeds_lockstep_inner() {
     let inner_bus = InProcessBus::new("inner-bus");
     let inner = Compositor::new(
         vec![Box::new(inner_counter)],
-        Box::new(inner_bus),
+        Arc::new(inner_bus),
     )
     .with_id("lockstep-inner");
 
@@ -168,7 +168,7 @@ async fn supervisory_outer_embeds_lockstep_inner() {
             Box::new(outer_counter),
             Box::new(inner),
         ],
-        Box::new(outer_bus),
+        Arc::new(outer_bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(10));
@@ -246,7 +246,7 @@ async fn freshness_metadata_reflects_staleness_at_boundary() {
     let inner = SupervisoryCompositor::new(
         "supervisory-inner",
         vec![Box::new(inner_counter)],
-        Box::new(inner_bus),
+        Arc::new(inner_bus),
         Duration::from_millis(50), // Short timeout for staleness testing
     )
     .with_step_interval(Duration::from_millis(5));
@@ -257,7 +257,7 @@ async fn freshness_metadata_reflects_staleness_at_boundary() {
     let outer_bus = InProcessBus::new("outer-bus");
     let mut outer = Compositor::new(
         vec![Box::new(inner) as Box<dyn Partition>],
-        Box::new(outer_bus),
+        Arc::new(outer_bus),
     )
     .with_id("lockstep-outer");
 
@@ -308,7 +308,7 @@ async fn supervisory_outer_adds_freshness_to_lockstep_inner() {
     let inner_bus = InProcessBus::new("inner-bus");
     let inner = Compositor::new(
         vec![Box::new(inner_counter)],
-        Box::new(inner_bus),
+        Arc::new(inner_bus),
     )
     .with_id("lockstep-inner");
 
@@ -316,7 +316,7 @@ async fn supervisory_outer_adds_freshness_to_lockstep_inner() {
     let mut outer = SupervisoryCompositor::new(
         "supervisory-outer",
         vec![Box::new(inner) as Box<dyn Partition>],
-        Box::new(outer_bus),
+        Arc::new(outer_bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(10));
@@ -373,7 +373,7 @@ async fn three_layer_mixed_strategy_nesting() {
     let innermost_bus = InProcessBus::new("innermost-bus");
     let innermost = Compositor::new(
         vec![Box::new(innermost_counter)],
-        Box::new(innermost_bus),
+        Arc::new(innermost_bus),
     )
     .with_id("innermost-lockstep")
     .with_layer_depth(2);
@@ -383,7 +383,7 @@ async fn three_layer_mixed_strategy_nesting() {
     let middle = SupervisoryCompositor::new(
         "middle-supervisory",
         vec![Box::new(innermost) as Box<dyn Partition>],
-        Box::new(middle_bus),
+        Arc::new(middle_bus),
         Duration::from_secs(1),
     )
     .with_step_interval(Duration::from_millis(10))
@@ -399,7 +399,7 @@ async fn three_layer_mixed_strategy_nesting() {
             Box::new(outer_counter),
             Box::new(middle),
         ],
-        Box::new(outer_bus),
+        Arc::new(outer_bus),
     )
     .with_id("outer-lockstep");
 
@@ -507,7 +507,7 @@ async fn both_strategies_produce_uniform_state_contribution_format() {
     let lockstep_bus = InProcessBus::new("lockstep-bus");
     let mut lockstep = Compositor::new(
         vec![Box::new(lockstep_counter)],
-        Box::new(lockstep_bus),
+        Arc::new(lockstep_bus),
     ).with_id("lockstep");
 
     lockstep.init().unwrap();
@@ -529,7 +529,7 @@ async fn both_strategies_produce_uniform_state_contribution_format() {
     let mut supervisory = SupervisoryCompositor::new(
         "supervisory",
         vec![Box::new(supervisory_counter)],
-        Box::new(supervisory_bus),
+        Arc::new(supervisory_bus),
         Duration::from_secs(1),
     ).with_step_interval(Duration::from_millis(5));
 
