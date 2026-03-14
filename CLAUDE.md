@@ -8,7 +8,7 @@ uniform structural primitives. The prototype exists to stress-test the FPA speci
 (`docs/design/SPECIFICATION.md`) and conventions (`docs/design/CONVENTIONS.md`), surface
 findings against the spec, and improve it through implementation experience.
 
-This prototype is intended to bootstrap real FPA applications. Code quality, API design,
+This prototype is also intended to bootstrap real FPA applications. Code quality, API design,
 and architectural decisions should be production-grade, not throwaway.
 
 ## Relationship to the spec
@@ -67,11 +67,20 @@ hacks that make tests pass.
 - Compositor tests assert compositional properties (delivery, conservation, ordering)
   that hold regardless of partition implementation (FPA-037)
 - Canonical inputs and tolerances live in fpa-contract test support, scoped by version
+- Tests must comply with spec behavior. Do not change tests without considering how the spec can be improved first
 
 ## Open feedback files
 
 - `docs/feedback/FPA-004-network.md` — NetworkBus serialization gap (deferred to Phase 5 Track J2)
 - `docs/feedback/FPA-030.md` — Diataxis documentation structure (deferred to Phase 7)
+
+## PR review threads
+
+To resolve review threads via `gh`, use the GraphQL API:
+
+1. Get thread IDs: `gh api graphql -f query='{ repository(owner: "simtheverse", name: "fractal") { pullRequest(number: N) { reviewThreads(first: 20) { nodes { id isResolved comments(first: 1) { nodes { body } } } } } } }'`
+2. Reply with `gh api repos/simtheverse/fractal/pulls/N/comments --method POST -f body="..." -F in_reply_to=COMMENT_ID`
+3. Resolve with `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "PRRT_..."}) { thread { isResolved } } }'`
 
 ## Commit style
 
