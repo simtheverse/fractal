@@ -48,7 +48,7 @@ fn event_engine_integrated_in_phase3() {
 fn time_triggered_event_fires_after_enough_ticks() {
     let mut compositor = setup_compositor();
 
-    // Event fires at t >= 3.0; with dt=1.0, tick_count*dt reaches 3.0 at tick 3
+    // Event fires at t >= 3.0; with dt=1.0, elapsed_time reaches 3.0 at tick 3
     let events = vec![EventDefinition {
         id: "delayed".to_string(),
         trigger: EventTrigger::Time { at: 3.0 },
