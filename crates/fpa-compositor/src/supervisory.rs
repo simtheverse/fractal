@@ -19,11 +19,17 @@ use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 /// Ok(id) on success, Err((id, operation, message)) on failure.
 type InitSignal = Result<String, (String, String, String)>;
 
-/// Run a partition lifecycle call on a blocking thread with true deadline
-/// enforcement (FPA-011).
+/// Run a partition lifecycle call on a blocking thread with deadline
+/// monitoring (FPA-011).
 ///
 /// The partition is moved into `spawn_blocking` so the tokio worker thread
 /// is free. `tokio::time::timeout` races the call against the deadline.
+///
+/// **Limitation:** `tokio::time::timeout` + `spawn_blocking` stops *awaiting*
+/// the blocking thread on timeout, but cannot actually kill it. The blocking
+/// thread continues running (it is abandoned, not terminated). The compositor
+/// stops waiting and reports the fault, but the underlying OS thread is only
+/// reclaimed when the blocking call eventually returns or the process exits.
 ///
 /// On success: returns the partition and the call's result.
 /// On timeout: the partition is abandoned on the blocking thread (it's
@@ -71,10 +77,14 @@ async fn supervised_lifecycle<T: Send + 'static>(
             ))
         }
         // spawn_blocking task failed
-        Ok(Err(_join_err)) => {
+        Ok(Err(join_err)) => {
+            let detail = if join_err.is_panic() {
+                format!("{} task panicked: {}", operation, join_err)
+            } else {
+                format!("{} task was cancelled: {}", operation, join_err)
+            };
             Err(PartitionError::new(
-                &partition_id, operation,
-                format!("{} task failed unexpectedly", operation),
+                &partition_id, operation, detail,
             ))
         }
         // Timeout — partition abandoned on blocking thread
@@ -305,11 +315,26 @@ impl SupervisoryCompositor {
             match init_rx.recv().await {
                 Some(Ok(_id)) => { /* init succeeded */ }
                 Some(Err((id, operation, message))) => {
+                    // Shut down partition tasks that already initialized and
+                    // are running their step/contribute loop. Without this,
+                    // successfully-initialized tasks would keep running after
+                    // async_init returns an error.
+                    let handles = std::mem::take(&mut self.partition_handles);
+                    for handle in handles {
+                        let _ = handle.shutdown_tx.send(());
+                        let _ = handle.join_handle.await;
+                    }
                     self.state_machine.force_state(ExecutionState::Error);
                     return Err(self.make_error(&id, &operation, message));
                 }
                 None => {
-                    // Channel closed — a task panicked before sending its init result
+                    // Channel closed — a task panicked before sending its init result.
+                    // Clean up running tasks before returning.
+                    let handles = std::mem::take(&mut self.partition_handles);
+                    for handle in handles {
+                        let _ = handle.shutdown_tx.send(());
+                        let _ = handle.join_handle.await;
+                    }
                     self.state_machine.force_state(ExecutionState::Error);
                     return Err(self.make_error(
                         "compositor",
@@ -355,7 +380,7 @@ impl SupervisoryCompositor {
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let join_handle = tokio::spawn(async move {
-                // Initialize with true deadline enforcement (FPA-011).
+                // Initialize with deadline monitoring (FPA-011).
                 // Runs on a blocking thread so the tokio worker is free.
                 let partition = match supervised_lifecycle(
                     partition, fault::INIT_TIMEOUT, "init",
@@ -424,7 +449,7 @@ impl SupervisoryCompositor {
                         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
                     }
 
-                    // Step with true deadline enforcement (FPA-011).
+                    // Step with deadline monitoring (FPA-011).
                     let p = partition.take().unwrap();
                     match supervised_lifecycle(
                         p, fault::STEP_TIMEOUT, "step",
@@ -464,7 +489,7 @@ impl SupervisoryCompositor {
                         }
                     }
 
-                    // Contribute state with true deadline enforcement (FPA-011).
+                    // Contribute state with deadline monitoring (FPA-011).
                     let p = partition.take().unwrap();
                     match supervised_lifecycle(
                         p, fault::STEP_TIMEOUT, "contribute_state",
