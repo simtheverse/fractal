@@ -196,7 +196,7 @@ impl SupervisoryCompositor {
             })
             .map_err(|e| self.make_error("compositor", "init", e.to_string()))?;
 
-        // Drop the init receiver — faults will be detected via run_tick/check_for_faults.
+        // Drop the init receiver — faults will be detected via run_tick/contribute_state.
         let _init_rx = self.spawn_partition_tasks();
 
         self.state_machine
@@ -549,19 +549,21 @@ impl SupervisoryCompositor {
         let handles = std::mem::take(&mut self.partition_handles);
         for handle in handles {
             let _ = handle.shutdown_tx.send(());
-            if let Err(_join_err) = handle.join_handle.await {
-                // Task panicked outside safe_* wrappers — record as fault
+            if let Err(join_err) = handle.join_handle.await {
+                // Task terminated outside safe_* wrappers — record as fault
                 // so find_fault catches it below.
+                let message = if join_err.is_panic() {
+                    format!("partition '{}' task panicked unexpectedly", handle.id)
+                } else {
+                    format!("partition '{}' task was cancelled", handle.id)
+                };
                 let mut s = self.output_store.lock().unwrap();
                 s.insert(
                     handle.id.clone(),
                     FreshnessEntry {
                         output: PartitionOutput::Fault {
                             operation: "task".to_string(),
-                            message: format!(
-                                "partition '{}' task panicked unexpectedly",
-                                handle.id
-                            ),
+                            message,
                         },
                         updated_at: Instant::now(),
                         tick: 0,
