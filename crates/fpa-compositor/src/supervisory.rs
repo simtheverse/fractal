@@ -324,6 +324,7 @@ impl SupervisoryCompositor {
         self.bus.publish(SharedContext {
             state: toml::Value::Table(table),
             tick: self.tick_count,
+            execution_state: self.state_machine.state(),
         });
 
         Ok(())

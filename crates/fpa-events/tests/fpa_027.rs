@@ -8,8 +8,7 @@ fn armed_condition_event(id: &str, signal: &str, threshold: f64) -> EventDefinit
     EventDefinition {
         id: id.to_string(),
         trigger: EventTrigger::Condition {
-            signal: signal.to_string(),
-            predicate: Predicate::GreaterThan(threshold),
+            predicate: Predicate::GreaterThan { signal: signal.to_string(), threshold },
         },
         action: EventAction {
             action_id: format!("action_{}", id),
