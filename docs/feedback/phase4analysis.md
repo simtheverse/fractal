@@ -195,7 +195,7 @@ carrying freshness information.
 provides the uniform envelope, and both compositor types use it. See F1 resolution
 note and commit `2e67013`.
 
-### F3. NetworkBus is a structural stub — serialization gap remains (FPA-004)
+### F3. NetworkBus is a structural stub — serialization gap remains (FPA-004) — DEFERRED
 
 **Spec text (FPA-004):** "The system shall support... (c) network-based
 publish-subscribe over a configurable endpoint."
@@ -219,6 +219,10 @@ types) or use a subtrait pattern for network-eligible messages.
 text. Add a note to FPA-004 that the network transport mode requires messages to
 implement serialization, and that this is expressed through a `NetworkMessage` subtrait
 or equivalent mechanism — not by adding serde bounds to the base `Message` trait.
+
+**Disposition (2026-03-13):** Deferred to Phase 5 Track J2 (Network Transport
+Serialization), which adds tasks for implementing the `NetworkMessage` subtrait,
+updating `NetworkBus` to serialize/deserialize, and verifying round-trip fidelity.
 
 ### F4. Contract versioning is convention-based, not type-enforced (FPA-039) — ACCEPTED
 
