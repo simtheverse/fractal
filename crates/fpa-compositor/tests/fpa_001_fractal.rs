@@ -7,6 +7,7 @@
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// Build a 3-layer compositor hierarchy:
 ///
@@ -58,16 +59,18 @@ fn three_layer_nesting_state_and_ticks() {
     let root = state.as_table().unwrap();
     let partitions = root["partitions"].as_table().unwrap();
 
-    // Layer 0: partition A should have count = 3
-    let a_state = partitions["A"].as_table().unwrap();
+    // Layer 0: partition A — unwrap StateContribution envelope
+    let a_sc = StateContribution::from_toml(&partitions["A"]).expect("A should be a StateContribution");
+    let a_state = a_sc.state.as_table().unwrap();
     assert_eq!(
         a_state["count"].as_integer().unwrap(),
         3,
         "Layer 0 Counter A should have count 3 after 3 ticks"
     );
 
-    // Layer 0: partition B is a compositor, its state is a dump with partitions + system
-    let b_state = partitions["B"].as_table().unwrap();
+    // Layer 0: partition B is a compositor — unwrap envelope first
+    let b_sc = StateContribution::from_toml(&partitions["B"]).expect("B should be a StateContribution");
+    let b_state = b_sc.state.as_table().unwrap();
     let b_partitions_state = b_state["partitions"].as_table().unwrap();
     let b_system = b_state["system"].as_table().unwrap();
     assert_eq!(
@@ -76,16 +79,18 @@ fn three_layer_nesting_state_and_ticks() {
         "Layer 1 compositor B should have tick_count 3"
     );
 
-    // Layer 1: partition B1 (counter) should have count = 3
-    let b1_state = b_partitions_state["B1"].as_table().unwrap();
+    // Layer 1: partition B1 (counter) — unwrap envelope
+    let b1_sc = StateContribution::from_toml(&b_partitions_state["B1"]).expect("B1 should be a StateContribution");
+    let b1_state = b1_sc.state.as_table().unwrap();
     assert_eq!(
         b1_state["count"].as_integer().unwrap(),
         3,
         "Layer 1 Counter B1 should have count 3 after 3 ticks"
     );
 
-    // Layer 1: partition B2 is itself a compositor
-    let b2_state = b_partitions_state["B2"].as_table().unwrap();
+    // Layer 1: partition B2 is itself a compositor — unwrap envelope
+    let b2_sc = StateContribution::from_toml(&b_partitions_state["B2"]).expect("B2 should be a StateContribution");
+    let b2_state = b2_sc.state.as_table().unwrap();
     let b2_partitions_state = b2_state["partitions"].as_table().unwrap();
     let b2_system = b2_state["system"].as_table().unwrap();
     assert_eq!(
@@ -94,8 +99,9 @@ fn three_layer_nesting_state_and_ticks() {
         "Layer 2 compositor B2 should have tick_count 3"
     );
 
-    // Layer 2: partition B2a (counter) should have count = 3
-    let b2a_state = b2_partitions_state["B2a"].as_table().unwrap();
+    // Layer 2: partition B2a (counter) — unwrap envelope
+    let b2a_sc = StateContribution::from_toml(&b2_partitions_state["B2a"]).expect("B2a should be a StateContribution");
+    let b2a_state = b2a_sc.state.as_table().unwrap();
     assert_eq!(
         b2a_state["count"].as_integer().unwrap(),
         3,

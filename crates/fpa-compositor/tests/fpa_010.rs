@@ -9,6 +9,7 @@ use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::{Compositor, RelayPolicy};
 use fpa_compositor::state_machine::{ExecutionState, TransitionRequest};
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 fn make_compositor(policy: RelayPolicy) -> Compositor {
     let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
@@ -208,7 +209,8 @@ fn two_layer_relay_via_step() {
     // compositor is a Box<dyn Partition>. Use dump to verify the inner ran.
     let state = outer.dump().unwrap();
     let root = state.as_table().unwrap();
-    let b_state = root["partitions"].as_table().unwrap()["B"].as_table().unwrap();
+    let b_sc = StateContribution::from_toml(&root["partitions"].as_table().unwrap()["B"]).unwrap();
+    let b_state = b_sc.state.as_table().unwrap();
     assert_eq!(
         b_state["system"].as_table().unwrap()["tick_count"].as_integer().unwrap(),
         1,

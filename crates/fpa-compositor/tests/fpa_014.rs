@@ -4,6 +4,7 @@ use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::double_buffer::DoubleBuffer;
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// Helper: create and initialize a compositor with the given partition IDs.
 fn make_compositor(ids: &[&str]) -> Compositor {
@@ -64,14 +65,16 @@ fn tick_n_output_readable_during_tick_n_plus_1() {
     // Tick 2: swap moves tick-1 outputs to read buffer.
     comp.run_tick(1.0).unwrap();
 
-    // The read buffer now contains tick-1 outputs (count=1).
+    // The read buffer now contains tick-1 outputs (count=1), wrapped in StateContribution.
     let read_a = comp.buffer().read("a").unwrap();
-    let count_a = read_a.as_table().unwrap().get("count").unwrap().as_integer().unwrap();
+    let read_sc = StateContribution::from_toml(read_a).unwrap();
+    let count_a = read_sc.state.as_table().unwrap().get("count").unwrap().as_integer().unwrap();
     assert_eq!(count_a, 1, "read buffer should contain tick-1 output (count=1)");
 
     // The write buffer should have tick-2 outputs (count=2).
     let write_a = comp.buffer().write_all().get("a").unwrap();
-    let write_count_a = write_a.as_table().unwrap().get("count").unwrap().as_integer().unwrap();
+    let write_sc = StateContribution::from_toml(write_a).unwrap();
+    let write_count_a = write_sc.state.as_table().unwrap().get("count").unwrap().as_integer().unwrap();
     assert_eq!(write_count_a, 2, "write buffer should contain tick-2 output (count=2)");
 }
 

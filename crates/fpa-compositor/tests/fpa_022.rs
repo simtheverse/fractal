@@ -3,6 +3,7 @@
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// Dump produces valid TOML (parseable as a TOML string).
 #[test]
@@ -89,10 +90,14 @@ fn snapshot_with_extends_override() {
     // Take a snapshot (base)
     let base_snapshot = compositor.dump().unwrap();
 
-    // Create an "extending" fragment that overrides the counter's state
+    // Create an "extending" fragment that overrides the counter's state.
+    // The partition entry must use the StateContribution envelope format.
     let override_toml: toml::Value = toml::from_str(
         r#"
         [partitions.counter]
+        fresh = true
+        age_ms = 0
+        [partitions.counter.state]
         count = 42
         "#,
     )
@@ -112,11 +117,10 @@ fn snapshot_with_extends_override() {
 
     // The override should have won: counter at 42, not 5
     let state2 = compositor2.dump().unwrap();
-    let count = state2
-        .get("partitions")
-        .unwrap()
-        .get("counter")
-        .unwrap()
+    let counter_sc = StateContribution::from_toml(
+        state2.get("partitions").unwrap().get("counter").unwrap()
+    ).unwrap();
+    let count = counter_sc.state
         .get("count")
         .unwrap()
         .as_integer()

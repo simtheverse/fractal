@@ -4,6 +4,7 @@
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// A compositor-as-partition contributes a nested TOML fragment.
 #[test]
@@ -27,8 +28,12 @@ fn compositor_partition_contributes_nested_state() {
     assert!(table.contains_key("system"), "dump should contain system key");
 
     let partitions = table["partitions"].as_table().unwrap();
+    // Each partition is wrapped in a StateContribution envelope
     assert!(partitions.contains_key("b1"), "should have partition b1");
     assert!(partitions.contains_key("b2"), "should have partition b2");
+    // Verify each is a valid StateContribution
+    StateContribution::from_toml(&partitions["b1"]).expect("b1 should be StateContribution");
+    StateContribution::from_toml(&partitions["b2"]).expect("b2 should be StateContribution");
 }
 
 /// Outer compositor sees one contribution per inner compositor (not its sub-partitions).
@@ -65,8 +70,9 @@ fn outer_sees_one_contribution_per_inner_compositor() {
     assert!(outer_partitions.contains_key("A"), "should have partition A");
     assert!(outer_partitions.contains_key("B"), "should have partition B");
 
-    // B's contribution should itself be a nested table with partitions/system
-    let b_state = outer_partitions["B"].as_table().unwrap();
+    // B's contribution is a StateContribution envelope wrapping a compositor dump
+    let b_sc = StateContribution::from_toml(&outer_partitions["B"]).expect("B should be StateContribution");
+    let b_state = b_sc.state.as_table().unwrap();
     assert!(b_state.contains_key("partitions"), "B should have nested partitions");
 }
 

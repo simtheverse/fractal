@@ -14,7 +14,7 @@ use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::supervisory::{FreshnessEntry, SupervisoryCompositor};
 use fpa_contract::test_support::Counter;
-use fpa_contract::Partition;
+use fpa_contract::{Partition, StateContribution};
 
 /// Poll the output store until the given partition has produced output, or panic on timeout.
 async fn wait_for_output(
@@ -92,18 +92,19 @@ async fn lockstep_outer_embeds_supervisory_inner() {
     // Verify the outer counter stepped 3 times
     let state = outer.dump().unwrap();
     let partitions = state.as_table().unwrap()["partitions"].as_table().unwrap();
-    let outer_count = partitions["outer-counter"]
-        .as_table()
-        .unwrap()["count"]
-        .as_integer()
-        .unwrap();
+    let outer_sc = StateContribution::from_toml(&partitions["outer-counter"]).unwrap();
+    let outer_count = outer_sc.state.as_table().unwrap()["count"].as_integer().unwrap();
     assert_eq!(outer_count, 3, "outer counter should have stepped 3 times");
 
-    // Verify the supervisory inner contributed state with freshness metadata
-    let inner_state = partitions["supervisory-inner"].as_table().unwrap();
+    // Verify the supervisory inner contributed state with freshness metadata.
+    // The outer dump wraps supervisory-inner in a StateContribution envelope.
+    // Inside that, the supervisory compositor's contribute_state wraps each
+    // partition in its own StateContribution envelope with freshness metadata.
+    let supervisory_sc = StateContribution::from_toml(&partitions["supervisory-inner"]).unwrap();
+    let inner_state = supervisory_sc.state.as_table().unwrap();
     let inner_counter_meta = inner_state["inner-counter"].as_table().unwrap();
 
-    // The supervisory compositor wraps state with freshness metadata
+    // The supervisory compositor wraps state with freshness metadata (StateContribution)
     assert!(
         inner_counter_meta.contains_key("fresh"),
         "supervisory inner should include freshness metadata"
@@ -198,7 +199,10 @@ async fn supervisory_outer_embeds_lockstep_inner() {
         .unwrap();
     assert!(outer_count > 0, "outer counter should have stepped");
 
-    // The lock-step inner compositor should have produced nested state
+    // The lock-step inner compositor should have produced nested state.
+    // Note: the output store holds the raw contribute_state() output from the
+    // lock-step compositor. When used as a Partition, its contribute_state()
+    // calls dump(), which wraps each sub-partition in a StateContribution envelope.
     let inner_entry = s.get("lockstep-inner").expect("lockstep-inner should have output");
     let inner_state = inner_entry.value.as_table().unwrap();
 
@@ -212,11 +216,10 @@ async fn supervisory_outer_embeds_lockstep_inner() {
         "lock-step inner should contribute state with system key"
     );
 
-    // The inner counter should have been stepped
+    // The inner counter should have been stepped — unwrap the StateContribution envelope
     let inner_partitions = inner_state["partitions"].as_table().unwrap();
-    let inner_count = inner_partitions["inner-counter"]
-        .as_table()
-        .unwrap()["count"]
+    let inner_counter_sc = StateContribution::from_toml(&inner_partitions["inner-counter"]).unwrap();
+    let inner_count = inner_counter_sc.state.as_table().unwrap()["count"]
         .as_integer()
         .unwrap();
     assert!(
@@ -268,7 +271,8 @@ async fn freshness_metadata_reflects_staleness_at_boundary() {
 
     let state = outer.dump().unwrap();
     let partitions = state.as_table().unwrap()["partitions"].as_table().unwrap();
-    let inner_state = partitions["supervisory-inner"].as_table().unwrap();
+    let supervisory_sc = StateContribution::from_toml(&partitions["supervisory-inner"]).unwrap();
+    let inner_state = supervisory_sc.state.as_table().unwrap();
     let counter_meta = inner_state["inner-counter"].as_table().unwrap();
     assert_eq!(
         counter_meta.get("fresh").and_then(|v| v.as_bool()),
@@ -415,19 +419,17 @@ async fn three_layer_mixed_strategy_nesting() {
     let state = outer.dump().unwrap();
     let partitions = state.as_table().unwrap()["partitions"].as_table().unwrap();
 
-    // Outer counter should have count = 3
-    let outer_count = partitions["outer-counter"]
-        .as_table()
-        .unwrap()["count"]
-        .as_integer()
-        .unwrap();
+    // Outer counter should have count = 3 — unwrap StateContribution envelope
+    let outer_sc = StateContribution::from_toml(&partitions["outer-counter"]).unwrap();
+    let outer_count = outer_sc.state.as_table().unwrap()["count"].as_integer().unwrap();
     assert_eq!(outer_count, 3, "outer counter should have count 3");
 
-    // Middle supervisory should have state with freshness metadata
-    let middle_state = partitions["middle-supervisory"].as_table().unwrap();
+    // Middle supervisory — unwrap outer envelope, then access inner state
+    let middle_sc = StateContribution::from_toml(&partitions["middle-supervisory"]).unwrap();
+    let middle_state = middle_sc.state.as_table().unwrap();
     let innermost_meta = middle_state["innermost-lockstep"].as_table().unwrap();
 
-    // Freshness metadata from the supervisory layer
+    // Freshness metadata from the supervisory layer (StateContribution envelope)
     assert!(
         innermost_meta.contains_key("fresh"),
         "middle supervisory should provide freshness metadata for innermost"
@@ -446,9 +448,8 @@ async fn three_layer_mixed_strategy_nesting() {
     );
 
     let innermost_partitions = innermost_state["partitions"].as_table().unwrap();
-    let deep_count = innermost_partitions["deep-counter"]
-        .as_table()
-        .unwrap()["count"]
+    let deep_counter_sc = StateContribution::from_toml(&innermost_partitions["deep-counter"]).unwrap();
+    let deep_count = deep_counter_sc.state.as_table().unwrap()["count"]
         .as_integer()
         .unwrap();
     assert!(
@@ -458,4 +459,93 @@ async fn three_layer_mixed_strategy_nesting() {
 
     outer.shutdown().unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
+}
+
+// ---------------------------------------------------------------------------
+// StateContribution is defined in fpa-contract, importable by partitions
+// ---------------------------------------------------------------------------
+
+/// Verifies that `StateContribution` is importable from the contract crate
+/// (not the compositor crate), consistent with FPA-009 and FPA-003.
+#[test]
+fn state_contribution_importable_from_contract() {
+    // Construct, serialize, and deserialize a StateContribution
+    let sc = StateContribution {
+        state: {
+            let mut t = toml::map::Map::new();
+            t.insert("count".to_string(), toml::Value::Integer(42));
+            toml::Value::Table(t)
+        },
+        fresh: true,
+        age_ms: 0,
+    };
+
+    let toml_val = sc.to_toml();
+    let table = toml_val.as_table().unwrap();
+    assert!(table.contains_key("state"));
+    assert!(table.contains_key("fresh"));
+    assert!(table.contains_key("age_ms"));
+
+    let roundtripped = StateContribution::from_toml(&toml_val).unwrap();
+    assert_eq!(roundtripped.fresh, true);
+    assert_eq!(roundtripped.age_ms, 0);
+    assert_eq!(
+        roundtripped.state.as_table().unwrap()["count"].as_integer().unwrap(),
+        42
+    );
+}
+
+/// Both lock-step and supervisory compositors produce structurally identical
+/// `contribute_state()` output: each partition entry is a `StateContribution`
+/// envelope with `state`, `fresh`, and `age_ms` keys.
+#[tokio::test]
+async fn both_strategies_produce_uniform_state_contribution_format() {
+    // Lock-step compositor
+    let lockstep_counter = Counter::new("counter");
+    let lockstep_bus = InProcessBus::new("lockstep-bus");
+    let mut lockstep = Compositor::new(
+        vec![Box::new(lockstep_counter)],
+        Box::new(lockstep_bus),
+    ).with_id("lockstep");
+
+    lockstep.init().unwrap();
+    lockstep.run_tick(1.0).unwrap();
+
+    let lockstep_state = fpa_contract::Partition::contribute_state(&lockstep).unwrap();
+    let lockstep_partitions = lockstep_state.as_table().unwrap()["partitions"].as_table().unwrap();
+    let lockstep_entry = &lockstep_partitions["counter"];
+    let lockstep_sc = StateContribution::from_toml(lockstep_entry)
+        .expect("lock-step partition entry should be a valid StateContribution");
+    assert!(lockstep_sc.fresh, "lock-step should always report fresh=true");
+    assert_eq!(lockstep_sc.age_ms, 0, "lock-step should always report age_ms=0");
+
+    lockstep.shutdown().unwrap();
+
+    // Supervisory compositor
+    let supervisory_counter = Counter::new("counter");
+    let supervisory_bus = InProcessBus::new("supervisory-bus");
+    let mut supervisory = SupervisoryCompositor::new(
+        "supervisory",
+        vec![Box::new(supervisory_counter)],
+        Box::new(supervisory_bus),
+        Duration::from_secs(1),
+    ).with_step_interval(Duration::from_millis(5));
+
+    supervisory.init().unwrap();
+
+    wait_for_output(supervisory.output_store(), "counter", Duration::from_secs(2)).await;
+
+    supervisory.run_tick(0.0).unwrap();
+
+    let supervisory_state = fpa_contract::Partition::contribute_state(&supervisory).unwrap();
+    let supervisory_table = supervisory_state.as_table().unwrap();
+    let supervisory_entry = &supervisory_table["counter"];
+    let supervisory_sc = StateContribution::from_toml(supervisory_entry)
+        .expect("supervisory partition entry should be a valid StateContribution");
+
+    // Both have the same envelope structure: state, fresh, age_ms
+    assert!(supervisory_sc.fresh, "supervisory should report fresh for running partition");
+    assert!(supervisory_sc.state.is_table(), "supervisory inner state should be a table");
+
+    supervisory.async_shutdown().await.unwrap();
 }

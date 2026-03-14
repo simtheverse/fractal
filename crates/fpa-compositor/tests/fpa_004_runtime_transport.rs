@@ -8,6 +8,7 @@ use fpa_bus::{AsyncBus, Bus, BusExt, BusReader, InProcessBus, NetworkBus, Transp
 use fpa_compositor::compositor::{Compositor, SharedContext};
 use fpa_compositor::state_machine::ExecutionState;
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// Helper: build a compositor with the given bus, run N ticks, return the dump.
 fn run_compositor_with_bus(bus: Box<dyn Bus>, n: u64) -> toml::Value {
@@ -175,13 +176,13 @@ fn nested_compositors_with_different_transports() {
     let state = outer.dump().unwrap();
     let partitions = state.as_table().unwrap()["partitions"].as_table().unwrap();
 
-    let a_count = partitions["A"]
-        .as_table().unwrap()["count"]
+    let a_sc = StateContribution::from_toml(&partitions["A"]).unwrap();
+    let a_count = a_sc.state.as_table().unwrap()["count"]
         .as_integer().unwrap();
     assert_eq!(a_count, 3);
 
-    let b_tick_count = partitions["B"]
-        .as_table().unwrap()["system"]
+    let b_sc = StateContribution::from_toml(&partitions["B"]).unwrap();
+    let b_tick_count = b_sc.state.as_table().unwrap()["system"]
         .as_table().unwrap()["tick_count"]
         .as_integer().unwrap();
     assert_eq!(b_tick_count, 3);

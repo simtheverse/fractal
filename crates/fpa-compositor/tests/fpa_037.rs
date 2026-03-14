@@ -8,6 +8,7 @@ use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::state_machine::ExecutionState;
 use fpa_contract::Partition;
+use fpa_contract::StateContribution;
 use fpa_contract::test_support::{Accumulator, Counter, Doubler};
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::multi_rate::RateConfig;
 use fpa_contract::test_support::{Accumulator, Counter};
-use fpa_contract::{Partition, PartitionError};
+use fpa_contract::{Partition, PartitionError, StateContribution};
 
 /// Fast partition (rate 4) steps 4x per tick, slow partition (rate 1) steps 1x.
 #[test]
@@ -30,22 +30,14 @@ fn fast_partition_steps_4x_per_slow_partition_1x() {
     // After 1 outer tick: fast counter has count=4, slow counter has count=1
     let write_buf = compositor.buffer().write_all();
 
-    let fast_count = write_buf["fast"]
-        .as_table()
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let fast_sc = StateContribution::from_toml(&write_buf["fast"]).unwrap();
+    let fast_count = fast_sc.state.as_table().unwrap()
+        .get("count").unwrap().as_integer().unwrap();
     assert_eq!(fast_count, 4, "fast partition should have stepped 4 times");
 
-    let slow_count = write_buf["slow"]
-        .as_table()
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let slow_sc = StateContribution::from_toml(&write_buf["slow"]).unwrap();
+    let slow_count = slow_sc.state.as_table().unwrap()
+        .get("count").unwrap().as_integer().unwrap();
     assert_eq!(slow_count, 1, "slow partition should have stepped 1 time");
 }
 
@@ -70,22 +62,14 @@ fn multi_rate_accumulates_over_multiple_ticks() {
 
     let write_buf = compositor.buffer().write_all();
 
-    let fast_count = write_buf["fast"]
-        .as_table()
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let fast_sc = StateContribution::from_toml(&write_buf["fast"]).unwrap();
+    let fast_count = fast_sc.state.as_table().unwrap()
+        .get("count").unwrap().as_integer().unwrap();
     assert_eq!(fast_count, 20, "fast partition should have stepped 20 times after 5 ticks");
 
-    let slow_count = write_buf["slow"]
-        .as_table()
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let slow_sc = StateContribution::from_toml(&write_buf["slow"]).unwrap();
+    let slow_count = slow_sc.state.as_table().unwrap()
+        .get("count").unwrap().as_integer().unwrap();
     assert_eq!(slow_count, 5, "slow partition should have stepped 5 times after 5 ticks");
 }
 
@@ -111,14 +95,9 @@ fn shared_context_reflects_final_state() {
     let write_buf = compositor.buffer().write_all();
 
     // fast partition stepped 4 times, so its state should show count=4
-    let fast_state = &write_buf["fast"];
-    let fast_count = fast_state
-        .as_table()
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let fast_sc = StateContribution::from_toml(&write_buf["fast"]).unwrap();
+    let fast_count = fast_sc.state.as_table().unwrap()
+        .get("count").unwrap().as_integer().unwrap();
     assert_eq!(fast_count, 4, "shared context should reflect final sub-step state");
 }
 
@@ -161,13 +140,9 @@ fn multi_rate_dt_is_divided_correctly() {
 
     // 4 sub-steps * 0.25 = 1.0
     let write_buf = compositor.buffer().write_all();
-    let total = write_buf["acc"]
-        .as_table()
-        .unwrap()
-        .get("total")
-        .unwrap()
-        .as_float()
-        .unwrap();
+    let acc_sc = StateContribution::from_toml(&write_buf["acc"]).unwrap();
+    let total = acc_sc.state.as_table().unwrap()
+        .get("total").unwrap().as_float().unwrap();
     assert!(
         (total - 1.0).abs() < 1e-12,
         "after 1 tick with rate=4 and dt=1.0, total should be 1.0 but was {}",
@@ -177,13 +152,9 @@ fn multi_rate_dt_is_divided_correctly() {
     // After a second tick the total should be 2.0
     compositor.run_tick(1.0).unwrap();
     let write_buf = compositor.buffer().write_all();
-    let total = write_buf["acc"]
-        .as_table()
-        .unwrap()
-        .get("total")
-        .unwrap()
-        .as_float()
-        .unwrap();
+    let acc_sc = StateContribution::from_toml(&write_buf["acc"]).unwrap();
+    let total = acc_sc.state.as_table().unwrap()
+        .get("total").unwrap().as_float().unwrap();
     assert!(
         (total - 2.0).abs() < 1e-12,
         "after 2 ticks with rate=4 and dt=1.0, total should be 2.0 but was {}",
@@ -277,13 +248,9 @@ fn fallback_completes_remaining_sub_steps() {
     // The fallback Counter should have been stepped for:
     //   sub 2 (the failed sub-step, fallback takes over) + sub 3 (remaining) = 2 steps
     let write_buf = compositor.buffer().write_all();
-    let count = write_buf["fragile"]
-        .as_table()
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let fragile_sc = StateContribution::from_toml(&write_buf["fragile"]).unwrap();
+    let count = fragile_sc.state.as_table().unwrap()
+        .get("count").unwrap().as_integer().unwrap();
     assert_eq!(
         count, 2,
         "fallback should complete remaining sub-steps: 1 for the failed sub-step + 1 remaining = 2"
@@ -312,13 +279,9 @@ fn non_power_of_two_rate_divides_dt_correctly() {
 
     // 3 sub-steps * (1.0/3.0) = 1.0
     let write_buf = compositor.buffer().write_all();
-    let total = write_buf["acc3"]
-        .as_table()
-        .unwrap()
-        .get("total")
-        .unwrap()
-        .as_float()
-        .unwrap();
+    let acc3_sc = StateContribution::from_toml(&write_buf["acc3"]).unwrap();
+    let total = acc3_sc.state.as_table().unwrap()
+        .get("total").unwrap().as_float().unwrap();
     assert!(
         (total - 1.0).abs() < 1e-12,
         "rate=3 with dt=1.0 should sum to 1.0 but was {}",
@@ -351,33 +314,21 @@ fn mixed_rates_in_same_compositor() {
     let write_buf = compositor.buffer().write_all();
 
     // Counter r2: 2 steps
-    let r2_count = write_buf["r2"]
-        .as_table()
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let r2_sc = StateContribution::from_toml(&write_buf["r2"]).unwrap();
+    let r2_count = r2_sc.state.as_table().unwrap()
+        .get("count").unwrap().as_integer().unwrap();
     assert_eq!(r2_count, 2, "rate=2 counter should have 2 steps");
 
     // Counter r3: 3 steps
-    let r3_count = write_buf["r3"]
-        .as_table()
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let r3_sc = StateContribution::from_toml(&write_buf["r3"]).unwrap();
+    let r3_count = r3_sc.state.as_table().unwrap()
+        .get("count").unwrap().as_integer().unwrap();
     assert_eq!(r3_count, 3, "rate=3 counter should have 3 steps");
 
     // Accumulator a2: 2 * 0.5 = 1.0
-    let a2_total = write_buf["a2"]
-        .as_table()
-        .unwrap()
-        .get("total")
-        .unwrap()
-        .as_float()
-        .unwrap();
+    let a2_sc = StateContribution::from_toml(&write_buf["a2"]).unwrap();
+    let a2_total = a2_sc.state.as_table().unwrap()
+        .get("total").unwrap().as_float().unwrap();
     assert!(
         (a2_total - 1.0).abs() < 1e-12,
         "rate=2 accumulator should total 1.0 but was {}",
@@ -385,13 +336,9 @@ fn mixed_rates_in_same_compositor() {
     );
 
     // Accumulator a3: 3 * (1/3) = 1.0
-    let a3_total = write_buf["a3"]
-        .as_table()
-        .unwrap()
-        .get("total")
-        .unwrap()
-        .as_float()
-        .unwrap();
+    let a3_sc = StateContribution::from_toml(&write_buf["a3"]).unwrap();
+    let a3_total = a3_sc.state.as_table().unwrap()
+        .get("total").unwrap().as_float().unwrap();
     assert!(
         (a3_total - 1.0).abs() < 1e-12,
         "rate=3 accumulator should total 1.0 but was {}",

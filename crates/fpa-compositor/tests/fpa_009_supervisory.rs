@@ -259,11 +259,10 @@ async fn run_tick_publishes_shared_context_with_freshness() {
         .and_then(|v| v.as_table())
         .expect("should have counter-1");
 
-    // Should have freshness metadata
+    // Should have freshness metadata (StateContribution envelope)
     assert!(counter_entry.contains_key("fresh"));
     assert!(counter_entry.contains_key("age_ms"));
     assert!(counter_entry.contains_key("state"));
-    assert!(counter_entry.contains_key("tick"));
 
     // Should be fresh
     assert_eq!(

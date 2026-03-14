@@ -3,6 +3,7 @@
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// Dump invokes contribute_state() on all partitions.
 #[test]
@@ -21,21 +22,11 @@ fn dump_invokes_contribute_state_on_all_partitions() {
     let snapshot = compositor.dump().unwrap();
     let partitions_table = snapshot.get("partitions").unwrap().as_table().unwrap();
 
-    // Both partitions should have contributed state with count = 2
-    let a_count = partitions_table
-        .get("a")
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
-    let b_count = partitions_table
-        .get("b")
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    // Both partitions should have contributed state with count = 2 (wrapped in StateContribution)
+    let a_sc = StateContribution::from_toml(partitions_table.get("a").unwrap()).unwrap();
+    let a_count = a_sc.state.get("count").unwrap().as_integer().unwrap();
+    let b_sc = StateContribution::from_toml(partitions_table.get("b").unwrap()).unwrap();
+    let b_count = b_sc.state.get("count").unwrap().as_integer().unwrap();
 
     assert_eq!(a_count, 2);
     assert_eq!(b_count, 2);
@@ -44,13 +35,16 @@ fn dump_invokes_contribute_state_on_all_partitions() {
 /// Load restores state via load_state().
 #[test]
 fn load_restores_state_via_load_state() {
-    // Build a state fragment manually
+    // Build a state fragment manually (using StateContribution envelope format)
     let state: toml::Value = toml::from_str(
         r#"
         [system]
         tick_count = 10
 
         [partitions.counter]
+        fresh = true
+        age_ms = 0
+        [partitions.counter.state]
         count = 7
         "#,
     )
@@ -67,17 +61,12 @@ fn load_restores_state_via_load_state() {
 
     assert_eq!(compositor.tick_count(), 10);
 
-    // Verify partition state was restored
+    // Verify partition state was restored (dump wraps in StateContribution)
     let snapshot = compositor.dump().unwrap();
-    let count = snapshot
-        .get("partitions")
-        .unwrap()
-        .get("counter")
-        .unwrap()
-        .get("count")
-        .unwrap()
-        .as_integer()
-        .unwrap();
+    let counter_sc = StateContribution::from_toml(
+        snapshot.get("partitions").unwrap().get("counter").unwrap()
+    ).unwrap();
+    let count = counter_sc.state.get("count").unwrap().as_integer().unwrap();
     assert_eq!(count, 7);
 }
 
@@ -145,6 +134,9 @@ fn load_while_running_succeeds_in_prototype() {
         tick_count = 42
 
         [partitions.counter]
+        fresh = true
+        age_ms = 0
+        [partitions.counter.state]
         count = 10
         "#,
     )

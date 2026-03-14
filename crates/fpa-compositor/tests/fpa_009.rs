@@ -4,6 +4,7 @@ use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::state_machine::ExecutionState;
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// Compositor controls partition lifecycle: init, step, shutdown.
 #[test]
@@ -76,7 +77,8 @@ fn shared_context_published_each_tick() {
     // After tick 2, read buffer has tick-1 output (count=1)
     compositor.run_tick(1.0).unwrap();
     let read_val = compositor.buffer().read("counter").unwrap();
-    let count = read_val
+    let sc = StateContribution::from_toml(read_val).expect("should be a StateContribution");
+    let count = sc.state
         .as_table()
         .unwrap()
         .get("count")

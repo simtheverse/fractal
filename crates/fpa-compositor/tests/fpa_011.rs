@@ -3,7 +3,7 @@
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::state_machine::ExecutionState;
-use fpa_contract::{Partition, PartitionError};
+use fpa_contract::{Partition, PartitionError, StateContribution};
 
 // --- Test partition implementations ---
 
@@ -271,9 +271,10 @@ fn fallback_activated_on_fault() {
     let result = compositor.run_tick(1.0);
     assert!(result.is_ok(), "compositor should continue with fallback");
 
-    // The fallback's state should be in the write buffer
+    // The fallback's state should be in the write buffer (wrapped in StateContribution)
     let state = compositor.buffer().write_all().get("primary").unwrap();
-    let table = state.as_table().unwrap();
+    let sc = StateContribution::from_toml(state).unwrap();
+    let table = sc.state.as_table().unwrap();
     assert!(
         table.contains_key("fallback_steps"),
         "fallback partition state should be in the buffer"

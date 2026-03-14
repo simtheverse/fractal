@@ -6,6 +6,7 @@
 use fpa_bus::{Bus, BusExt, BusReader, InProcessBus};
 use fpa_compositor::compositor::{Compositor, SharedContext};
 use fpa_contract::test_support::Counter;
+use fpa_contract::StateContribution;
 
 /// Layer 1 SharedContext is published on Layer 1 bus, not Layer 0 bus.
 #[test]
@@ -132,15 +133,17 @@ fn inner_shared_context_does_not_appear_on_outer_bus() {
     assert!(state_table.contains_key("A"));
     assert!(state_table.contains_key("B"));
 
-    // The value for "B" is the compositor's dump (contains "partitions" and "system"),
-    // NOT the inner SharedContext. The inner SharedContext only lives on the inner bus.
-    let b_value = state_table.get("B").unwrap().as_table().unwrap();
+    // The value for "B" is a StateContribution envelope wrapping the compositor's dump.
+    // The inner SharedContext only lives on the inner bus.
+    let b_sc = StateContribution::from_toml(state_table.get("B").unwrap())
+        .expect("B should be a StateContribution envelope");
+    let b_inner = b_sc.state.as_table().unwrap();
     assert!(
-        b_value.contains_key("partitions"),
+        b_inner.contains_key("partitions"),
         "B's state should be a compositor dump with 'partitions' key"
     );
     assert!(
-        b_value.contains_key("system"),
+        b_inner.contains_key("system"),
         "B's state should be a compositor dump with 'system' key"
     );
 }
@@ -176,12 +179,9 @@ fn inner_and_outer_tick_counts_independent() {
     // Inner compositor (partition B) ran its own independent tick count
     // Verify through state: B's contribute_state includes tick_count
     let state = outer.dump().unwrap();
-    let b_state = state
-        .as_table().unwrap()
-        ["partitions"]
-        .as_table().unwrap()
-        ["B"]
-        .as_table().unwrap();
+    let b_envelope = &state.as_table().unwrap()["partitions"].as_table().unwrap()["B"];
+    let b_sc = StateContribution::from_toml(b_envelope).unwrap();
+    let b_state = b_sc.state.as_table().unwrap();
 
     let inner_tick = b_state["system"]
         .as_table().unwrap()

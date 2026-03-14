@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use fpa_bus::{Bus, BusExt, InProcessBus};
-use fpa_contract::{Partition, PartitionError};
+use fpa_contract::{Partition, PartitionError, StateContribution};
 use fpa_events::EventEngine;
 
 // Re-export SharedContext so downstream code importing from compositor::SharedContext still works.
@@ -383,7 +383,12 @@ impl Compositor {
             // Collect output after all sub-steps (including fallback's remaining steps)
             let state = fault::safe_contribute_state(self.partitions[i].as_ref())
                 .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-            self.double_buffer.write(&partition_id, state);
+            let envelope = StateContribution {
+                state,
+                fresh: true,
+                age_ms: 0,
+            };
+            self.double_buffer.write(&partition_id, envelope.to_toml());
 
             i += 1;
         }
@@ -518,11 +523,18 @@ impl Compositor {
     /// Build a signal map from the read buffer (pre-step snapshot).
     ///
     /// Extracts numeric values from partition state tables, using the format
-    /// `partition_id.key` as the signal name.
+    /// `partition_id.key` as the signal name. Values are unwrapped from the
+    /// `StateContribution` envelope — signals come from the inner `state` key.
     fn build_signals(&self) -> HashMap<String, f64> {
         let mut signals = HashMap::new();
         for (id, value) in self.double_buffer.read_all() {
-            if let Some(table) = value.as_table() {
+            // Unwrap the StateContribution envelope to get the inner state
+            let inner = if let Some(sc) = StateContribution::from_toml(value) {
+                sc.state
+            } else {
+                value.clone()
+            };
+            if let Some(table) = inner.as_table() {
                 for (key, val) in table {
                     if let Some(f) = val.as_float() {
                         signals.insert(format!("{}.{}", id, key), f);
@@ -541,7 +553,12 @@ impl Compositor {
         for partition in &self.partitions {
             let state = fault::safe_contribute_state(partition.as_ref())
                 .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-            partitions.insert(partition.id().to_string(), state);
+            let envelope = StateContribution {
+                state,
+                fresh: true,
+                age_ms: 0,
+            };
+            partitions.insert(partition.id().to_string(), envelope.to_toml());
         }
         let mut root = toml::map::Map::new();
         root.insert("partitions".to_string(), toml::Value::Table(partitions));
@@ -580,8 +597,14 @@ impl Compositor {
         // Extract partitions section
         if let Some(partitions) = fragment.get("partitions").and_then(|v| v.as_table()) {
             for partition in &mut self.partitions {
-                if let Some(state) = partitions.get(partition.id()) {
-                    fault::safe_load_state(partition.as_mut(), state.clone())
+                if let Some(envelope_value) = partitions.get(partition.id()) {
+                    // Unwrap StateContribution envelope to get the inner state
+                    let state = if let Some(sc) = StateContribution::from_toml(envelope_value) {
+                        sc.state
+                    } else {
+                        envelope_value.clone()
+                    };
+                    fault::safe_load_state(partition.as_mut(), state)
                         .into_result()
                         .map_err(|e| e.with_layer_depth(self.layer_depth))?;
                 }

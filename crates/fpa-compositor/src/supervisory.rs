@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use fpa_bus::{Bus, BusExt, InProcessBus};
-use fpa_contract::{Partition, PartitionError, SharedContext};
+use fpa_contract::{Partition, PartitionError, SharedContext, StateContribution};
 use crate::state_machine::{ExecutionState, StateMachine, TransitionRequest};
 
 /// An entry in the output store with freshness tracking.
@@ -290,20 +290,12 @@ impl SupervisoryCompositor {
             let fresh = age < self.heartbeat_timeout;
             let age_ms = age.as_millis() as u64;
 
-            // Wrap the partition state with freshness metadata
-            let mut meta_table = toml::map::Map::new();
-            meta_table.insert("state".to_string(), entry.value.clone());
-            meta_table.insert("fresh".to_string(), toml::Value::Boolean(fresh));
-            meta_table.insert(
-                "age_ms".to_string(),
-                toml::Value::Integer(age_ms as i64),
-            );
-            meta_table.insert(
-                "tick".to_string(),
-                toml::Value::Integer(entry.tick as i64),
-            );
-
-            table.insert(id.clone(), toml::Value::Table(meta_table));
+            let envelope = StateContribution {
+                state: entry.value.clone(),
+                fresh,
+                age_ms,
+            };
+            table.insert(id.clone(), envelope.to_toml());
         }
 
         drop(store);
@@ -398,15 +390,12 @@ impl SupervisoryCompositor {
             let fresh = age < self.heartbeat_timeout;
             let age_ms = age.as_millis() as u64;
 
-            let mut meta_table = toml::map::Map::new();
-            meta_table.insert("state".to_string(), entry.value.clone());
-            meta_table.insert("fresh".to_string(), toml::Value::Boolean(fresh));
-            meta_table.insert(
-                "age_ms".to_string(),
-                toml::Value::Integer(age_ms as i64),
-            );
-
-            table.insert(id.clone(), toml::Value::Table(meta_table));
+            let envelope = StateContribution {
+                state: entry.value.clone(),
+                fresh,
+                age_ms,
+            };
+            table.insert(id.clone(), envelope.to_toml());
         }
 
         Ok(toml::Value::Table(table))
@@ -472,10 +461,16 @@ impl Partition for SupervisoryCompositor {
         if let Some(table) = state.as_table() {
             let mut store = self.output_store.lock().unwrap();
             for (id, value) in table {
+                // Unwrap StateContribution envelope if present
+                let inner = if let Some(sc) = StateContribution::from_toml(value) {
+                    sc.state
+                } else {
+                    value.clone()
+                };
                 store.insert(
                     id.clone(),
                     FreshnessEntry {
-                        value: value.clone(),
+                        value: inner,
                         updated_at: Instant::now(),
                         tick: 0,
                     },
