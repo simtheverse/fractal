@@ -204,7 +204,26 @@ impl SupervisoryCompositor {
                     // Check for shutdown signal (non-blocking)
                     match shutdown_rx.try_recv() {
                         Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                            let _ = fault::safe_shutdown(partition.as_mut()).into_result();
+                            if let Err(e) = fault::safe_shutdown(partition.as_mut()).into_result() {
+                                let mut s = store.lock().unwrap();
+                                let mut error_table = toml::map::Map::new();
+                                error_table.insert(
+                                    "error".to_string(),
+                                    toml::Value::String(e.message.clone()),
+                                );
+                                error_table.insert(
+                                    "operation".to_string(),
+                                    toml::Value::String("shutdown".to_string()),
+                                );
+                                s.insert(
+                                    partition.id().to_string(),
+                                    FreshnessEntry {
+                                        value: toml::Value::Table(error_table),
+                                        updated_at: Instant::now(),
+                                        tick,
+                                    },
+                                );
+                            }
                             break;
                         }
                         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
@@ -330,6 +349,24 @@ impl SupervisoryCompositor {
 
         let store = self.output_store.lock().unwrap();
         let mut table = toml::map::Map::new();
+
+        // Check for faulted partitions (FPA-011): entries with an "error" field
+        // indicate a fault recorded by a spawned task. Propagate the first fault
+        // to the outer layer by transitioning to Error and returning an error.
+        let fault_info: Option<(String, String, String)> = store.iter().find_map(|(id, entry)| {
+            let error_table = entry.value.as_table()?;
+            let error_msg = error_table.get("error").and_then(|v| v.as_str())?;
+            let operation = error_table
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            Some((id.clone(), operation.to_string(), error_msg.to_string()))
+        });
+        if let Some((id, operation, message)) = fault_info {
+            drop(store);
+            self.state_machine.force_state(ExecutionState::Error);
+            return Err(self.make_error(&id, &operation, message));
+        }
 
         for (id, entry) in store.iter() {
             let age = now.duration_since(entry.updated_at);

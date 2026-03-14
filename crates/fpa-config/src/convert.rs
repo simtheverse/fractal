@@ -64,6 +64,11 @@ pub fn validated_event_definition(
     Ok(def)
 }
 
+/// Structural conversion only — does NOT validate the action identifier
+/// against an [`ActionRegistry`]. Production config loading should use
+/// [`validated_event_definition`] instead, which enforces FPA-029 scoping.
+/// This impl exists for tests and contexts where registry validation is
+/// handled separately.
 impl TryFrom<&EventConfig> for EventDefinition {
     type Error = String;
 

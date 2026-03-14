@@ -862,8 +862,8 @@ async fn supervisory_error_includes_partition_id_and_operation() {
 
     compositor.init().unwrap();
 
-    // Wait for the error to surface
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Wait for the error to surface in the output store
+    wait_for_output(compositor.output_store(), "my-partition-42", Duration::from_secs(2)).await;
 
     let store = compositor.output_store().lock().unwrap();
     let entry = store.get("my-partition-42").expect("should have entry");
