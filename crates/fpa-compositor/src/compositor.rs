@@ -537,10 +537,16 @@ impl Compositor {
         let mut signals = HashMap::new();
         for (id, value) in self.double_buffer.read_all() {
             // Navigate the StateContribution envelope by reference to avoid
-            // cloning the entire state tree. If the value has a "state" key
-            // (envelope format), read from that; otherwise read directly.
+            // cloning the entire state tree. Validate the full envelope shape
+            // (state + fresh bool + age_ms int) to avoid misinterpreting a
+            // partition state that happens to contain a "state" field.
             let inner = value
                 .as_table()
+                .filter(|t| {
+                    t.contains_key("state")
+                        && t.get("fresh").is_some_and(|v| v.is_bool())
+                        && t.get("age_ms").is_some_and(|v| v.is_integer())
+                })
                 .and_then(|t| t.get("state"))
                 .unwrap_or(value);
             if let Some(table) = inner.as_table() {

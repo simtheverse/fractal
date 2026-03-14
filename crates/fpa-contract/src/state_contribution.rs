@@ -30,9 +30,11 @@ impl StateContribution {
         let mut table = toml::map::Map::new();
         table.insert("state".to_string(), self.state.clone());
         table.insert("fresh".to_string(), toml::Value::Boolean(self.fresh));
+        let age_i64 = i64::try_from(self.age_ms)
+            .expect("age_ms exceeds i64::MAX — state contribution cannot be serialized");
         table.insert(
             "age_ms".to_string(),
-            toml::Value::Integer(self.age_ms as i64),
+            toml::Value::Integer(age_i64),
         );
         toml::Value::Table(table)
     }
