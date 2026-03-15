@@ -352,14 +352,6 @@ fn buses_are_independent_network() {
 // publish/subscribe pattern. NetworkBus uses codec registration to verify real
 // serialization round-trips in these workflow tests.
 
-/// Helper: create a NetworkBus with codecs for workflow test message types.
-fn network_bus_with_test_codecs(id: &str) -> NetworkBus {
-    let bus = NetworkBus::new(id);
-    bus.register_codec::<SharedContext>();
-    bus.register_codec::<TickEvent>();
-    bus
-}
-
 /// Shared context published each compositor tick (LatestValue semantic).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct SharedContext {
@@ -438,7 +430,16 @@ fn compositor_workflow_simulation_async() {
 
 #[test]
 fn compositor_workflow_simulation_network() {
-    compositor_workflow_simulation(network_bus_with_test_codecs("comp"), "Network");
+    compositor_workflow_simulation(NetworkBus::new("comp"), "Network");
+}
+
+#[cfg(feature = "json-codec")]
+#[test]
+fn compositor_workflow_simulation_network_serialized() {
+    let bus = NetworkBus::new("comp");
+    bus.register_codec::<SharedContext>();
+    bus.register_codec::<TickEvent>();
+    compositor_workflow_simulation(bus, "Network-serialized");
 }
 
 /// Verifies that subscribing mid-workflow only sees messages from that point forward,
@@ -497,5 +498,14 @@ fn late_subscriber_workflow_async() {
 
 #[test]
 fn late_subscriber_workflow_network() {
-    late_subscriber_workflow(network_bus_with_test_codecs("late"), "Network");
+    late_subscriber_workflow(NetworkBus::new("late"), "Network");
+}
+
+#[cfg(feature = "json-codec")]
+#[test]
+fn late_subscriber_workflow_network_serialized() {
+    let bus = NetworkBus::new("late");
+    bus.register_codec::<SharedContext>();
+    bus.register_codec::<TickEvent>();
+    late_subscriber_workflow(bus, "Network-serialized");
 }

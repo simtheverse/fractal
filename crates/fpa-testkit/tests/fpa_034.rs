@@ -59,13 +59,10 @@ fn system_uses_fragment_timestep() {
     );
 }
 
-/// System dump/load round-trip through the public API (FPA-022, FPA-023).
-///
-/// Uses two independent System instances — state is captured from the first
-/// and verified by running the second to the same point. Both systems go
-/// through the same from_fragment -> run entry point.
+/// Deterministic composition: two independent systems from the same fragment
+/// produce identical state (FPA-014, FPA-019).
 #[test]
-fn system_dump_load_produces_equivalent_state() {
+fn deterministic_composition_from_fragment() {
     let fragment = basic_fragment();
     let registry = PartitionRegistry::with_test_partitions();
 
