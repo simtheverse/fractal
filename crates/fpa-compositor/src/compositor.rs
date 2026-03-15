@@ -508,11 +508,18 @@ impl Compositor {
         }
 
         // Step 2: Process bus-mediated transition requests (FPA-006).
+        // Also feed each request into the relay system so that inner compositor
+        // requests are available to the outer layer via drain_relayed_requests()
+        // per FPA-010 Phase 3 step 4: "Relay qualified requests to the outer bus."
         for request in self.transition_reader.read_all() {
+            self.submit_inner_request(request.clone());
             self.process_transition_request(request)?;
         }
 
-        // Step 3: Check for pending direct signals.
+        // Step 3: Collect relayed requests from inner compositor partitions.
+        self.collect_inner_relayed_requests()?;
+
+        // Step 4: Check for pending direct signals.
         self.collect_inner_signals();
 
         Ok(())
@@ -801,21 +808,56 @@ impl Compositor {
         Ok(())
     }
 
+    /// Collect relayed transition requests from inner compositor partitions (FPA-010).
+    ///
+    /// After stepping, any partition that is itself a `Compositor` may have
+    /// pending relayed requests. This method drains those requests (applying the
+    /// inner compositor's relay policy) and processes them on the outer compositor.
+    fn collect_inner_relayed_requests(&mut self) -> Result<(), PartitionError> {
+        // Collect relayed requests from all inner compositors first to avoid
+        // borrow conflicts with self.process_transition_request().
+        let mut all_relayed = Vec::new();
+        for partition in &mut self.partitions {
+            if let Some(any) = partition.as_any_mut() {
+                if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
+                    all_relayed.extend(inner_comp.drain_relayed_requests());
+                }
+            }
+        }
+        for request in all_relayed {
+            // Feed into this compositor's relay so the request can continue
+            // propagating up to the next outer layer.
+            self.submit_inner_request(request.clone());
+            self.process_transition_request(request)?;
+        }
+        Ok(())
+    }
+
     /// Collect direct signals from inner compositor partitions (FPA-013).
     ///
     /// After stepping, any partition that is itself a `Compositor` may have
     /// emitted direct signals. This method drains those signals and extends
     /// the current compositor's `emitted_signals`, enabling signal propagation
     /// through nested layers.
+    ///
+    /// Signals are filtered against the outer compositor's `DirectSignalRegistry`:
+    /// only signals whose `signal_id` is registered at the outer layer propagate.
+    /// This enforces the FPA-013 boundary scoping requirement — signals do not
+    /// propagate beyond the declaring contract crate's boundary unless the outer
+    /// compositor explicitly registers them.
     fn collect_inner_signals(&mut self) {
         for partition in &mut self.partitions {
             if let Some(any) = partition.as_any_mut() {
                 if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
                     let signals = std::mem::take(&mut inner_comp.emitted_signals);
-                    self.emitted_signals.extend(signals);
+                    self.emitted_signals.extend(
+                        signals.into_iter().filter(|s| self.direct_signal_registry.is_registered(&s.signal_id)),
+                    );
                 } else if let Some(inner_sup) = any.downcast_mut::<crate::supervisory::SupervisoryCompositor>() {
                     let signals = inner_sup.drain_emitted_signals();
-                    self.emitted_signals.extend(signals);
+                    self.emitted_signals.extend(
+                        signals.into_iter().filter(|s| self.direct_signal_registry.is_registered(&s.signal_id)),
+                    );
                 }
             }
         }

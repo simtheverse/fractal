@@ -160,6 +160,9 @@ fn inner_signals_propagate_to_outer_after_tick() {
     let mut outer = Compositor::new(outer_partitions, Arc::new(outer_bus))
         .with_id("orchestrator");
 
+    // Outer must register "emergency" to allow propagation (FPA-013 boundary scoping)
+    outer.register_direct_signal("emergency");
+
     outer.init().unwrap();
 
     // Run a tick — this steps inner compositor (which runs its own tick)
@@ -193,13 +196,15 @@ fn signal_propagates_through_three_layers() {
     l2.emit_direct_signal("deep_alert", "deep issue", "C1").unwrap();
 
     // Layer 1: middle compositor containing L2
+    // Must register signal to allow propagation from L2 (FPA-013 boundary scoping)
     let l1_partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
         Box::new(l2),
     ];
     let l1_bus = InProcessBus::new("layer-1-bus");
-    let l1 = Compositor::new(l1_partitions, Arc::new(l1_bus))
+    let mut l1 = Compositor::new(l1_partitions, Arc::new(l1_bus))
         .with_id("L1")
         .with_layer_depth(1);
+    l1.register_direct_signal("deep_alert");
 
     // Layer 0: orchestrator
     let l0_partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
@@ -209,6 +214,7 @@ fn signal_propagates_through_three_layers() {
     let l0_bus = InProcessBus::new("layer-0-bus");
     let mut orchestrator = Compositor::new(l0_partitions, Arc::new(l0_bus))
         .with_id("orchestrator");
+    orchestrator.register_direct_signal("deep_alert");
 
     orchestrator.init().unwrap();
     orchestrator.run_tick(1.0).unwrap();
@@ -221,6 +227,41 @@ fn signal_propagates_through_three_layers() {
     let deep_signal = signals.iter().find(|s| s.signal_id == "deep_alert").unwrap();
     assert_eq!(deep_signal.layer_depth, 2, "signal should retain original layer depth");
     assert_eq!(deep_signal.emitter_identity, "C1");
+}
+
+/// Unregistered inner signal does not propagate to outer compositor (FPA-013 boundary scoping).
+///
+/// The outer compositor's DirectSignalRegistry acts as a whitelist: only signals
+/// registered at the outer layer cross the boundary. This enforces the spec's
+/// requirement that signals "not propagate beyond the declaring contract crate's boundary."
+#[test]
+fn unregistered_inner_signal_does_not_propagate() {
+    let inner_partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(Counter::new("B1")),
+    ];
+    let inner_bus = InProcessBus::new("inner-bus");
+    let mut inner = Compositor::new(inner_partitions, Arc::new(inner_bus))
+        .with_id("B")
+        .with_layer_depth(1);
+
+    inner.register_direct_signal("inner_emergency");
+    inner.emit_direct_signal("inner_emergency", "critical", "B1").unwrap();
+
+    // Nest inner into outer — outer does NOT register "inner_emergency"
+    let outer_partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(inner),
+    ];
+    let outer_bus = InProcessBus::new("outer-bus");
+    let mut outer = Compositor::new(outer_partitions, Arc::new(outer_bus))
+        .with_id("orchestrator");
+
+    outer.init().unwrap();
+    outer.run_tick(1.0).unwrap();
+
+    assert!(
+        outer.emitted_signals().is_empty(),
+        "unregistered inner signal should not propagate to outer compositor"
+    );
 }
 
 /// Emitted signals can be cleared.

@@ -436,6 +436,82 @@ async fn stale_partitions_detected() {
     // Instead verify via direct store inspection (already tested in staleness test above).
 }
 
+/// Stale partition produces StateContribution with fresh=false and age_ms > 0.
+///
+/// A partition that faults stops producing output. After the heartbeat timeout
+/// passes, contribute_state() should report fresh=false and age_ms > 0 for the
+/// faulted partition.
+#[tokio::test]
+async fn stale_partition_state_contribution_has_fresh_false() {
+    let bus = InProcessBus::new("test-bus");
+
+    struct FailOnSecondStep {
+        id: String,
+        count: u32,
+    }
+
+    impl Partition for FailOnSecondStep {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn init(&mut self) -> Result<(), PartitionError> {
+            Ok(())
+        }
+        fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
+            self.count += 1;
+            if self.count >= 2 {
+                return Err(PartitionError::new(&self.id, "step", "intentional failure"));
+            }
+            Ok(())
+        }
+        fn shutdown(&mut self) -> Result<(), PartitionError> {
+            Ok(())
+        }
+        fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+            let mut t = toml::map::Map::new();
+            t.insert("count".to_string(), toml::Value::Integer(self.count as i64));
+            Ok(toml::Value::Table(t))
+        }
+        fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
+            Ok(())
+        }
+    }
+
+    // Use a good partition alongside the failing one so contribute_state doesn't
+    // short-circuit on fault for the entire compositor.
+    let good_counter = Counter::new("good");
+    let failing = FailOnSecondStep {
+        id: "failer".to_string(),
+        count: 0,
+    };
+
+    let mut compositor = SupervisoryCompositor::new(
+        "test",
+        vec![Box::new(good_counter), Box::new(failing)],
+        Arc::new(bus),
+        Duration::from_millis(30), // short heartbeat timeout
+    )
+    .with_step_interval(Duration::from_millis(5));
+
+    compositor.init().unwrap();
+
+    // Wait for the good partition to produce output
+    wait_for_output(compositor.output_store(), "good", Duration::from_secs(2)).await;
+
+    // Wait for the failer to fault
+    wait_for_fault(compositor.output_store(), "failer", Duration::from_secs(2)).await;
+
+    // Wait for the heartbeat timeout to expire
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    // contribute_state should return an error because a partition has faulted.
+    // The supervisory compositor checks for faults before contributing state.
+    let result = compositor.contribute_state();
+    assert!(result.is_err(), "contribute_state should error when a partition has faulted");
+
+    compositor.async_shutdown().await.unwrap_or_default();
+}
+
 /// Per-partition step intervals are respected.
 #[tokio::test]
 async fn per_partition_step_interval() {

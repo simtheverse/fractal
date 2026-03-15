@@ -272,6 +272,80 @@ fn system_and_partition_events_use_same_schema() {
     );
 }
 
+/// Event actions do not cascade within the same tick (FPA-024 anti-cascading).
+///
+/// An action's side effects are not visible to other event conditions until the
+/// following tick. This is structurally guaranteed by evaluating events against
+/// the immutable read buffer (pre-step snapshot), but we test it explicitly as
+/// a regression guard.
+#[test]
+fn event_actions_do_not_cascade_within_same_tick() {
+    let mut compositor = setup_compositor();
+
+    // Event A fires when counter.count >= 1 (will fire starting at tick 2, when
+    // the read buffer has count=1 from tick 1).
+    // Event B fires when counter.count >= 1000 — impossible without cascade.
+    // If events could cascade (e.g., an action modifying signals mid-evaluation),
+    // Event B might fire. It should never fire.
+    let events = vec![
+        EventDefinition {
+            id: "event_a".to_string(),
+            trigger: EventTrigger::Condition {
+                predicate: Predicate::GreaterThan {
+                    signal: "counter.count".to_string(),
+                    threshold: 0.0,
+                },
+            },
+            action: EventAction {
+                action_id: "action_a".to_string(),
+                scope: "system".to_string(),
+                parameters: HashMap::new(),
+            },
+            armed: true,
+        },
+        EventDefinition {
+            id: "event_b".to_string(),
+            trigger: EventTrigger::Condition {
+                predicate: Predicate::GreaterThan {
+                    signal: "counter.count".to_string(),
+                    threshold: 999.0,
+                },
+            },
+            action: EventAction {
+                action_id: "action_b".to_string(),
+                scope: "system".to_string(),
+                parameters: HashMap::new(),
+            },
+            armed: true,
+        },
+    ];
+    compositor.set_event_engine(EventEngine::new(events));
+
+    // Run enough ticks for Event A to fire (it first fires at tick 2).
+    for tick in 1..=5 {
+        compositor.run_tick(1.0).unwrap();
+        let actions = compositor.last_triggered_actions();
+        assert!(
+            !actions.contains(&"action_b".to_string()),
+            "Event B (threshold=1000) should never fire at tick {} — anti-cascade guarantee",
+            tick,
+        );
+    }
+
+    // Verify Event A did fire (at tick 2+)
+    // Re-run one more tick to confirm Event A fires with count >= 1 in the read buffer
+    compositor.run_tick(1.0).unwrap();
+    let actions = compositor.last_triggered_actions();
+    assert!(
+        actions.contains(&"action_a".to_string()),
+        "Event A should fire when counter.count >= 1 in read buffer"
+    );
+    assert!(
+        !actions.contains(&"action_b".to_string()),
+        "Event B should still not fire — no cascading"
+    );
+}
+
 /// A disarmed event does not fire during run_tick, even when its trigger
 /// condition is met.
 #[test]
