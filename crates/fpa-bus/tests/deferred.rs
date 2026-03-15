@@ -16,7 +16,7 @@ fn deferred_mode_queues_messages() {
     let bus: &dyn Bus = &deferred;
     let mut reader = bus.subscribe::<SensorReading>();
 
-    deferred.set_deferred(true);
+    deferred.begin_deferred();
     bus.publish(SensorReading {
         value: 42.0,
         source: "s".into(),
@@ -50,7 +50,7 @@ fn flush_delivers_in_publish_order() {
     let bus: &dyn Bus = &deferred;
     let mut reader = bus.subscribe::<TestCommand>();
 
-    deferred.set_deferred(true);
+    deferred.begin_deferred();
     for i in 1..=3 {
         bus.publish(TestCommand {
             command: format!("cmd_{i}"),
@@ -60,7 +60,7 @@ fn flush_delivers_in_publish_order() {
 
     assert!(reader.read().is_none(), "nothing before flush");
 
-    deferred.flush();
+    deferred.end_deferred();
 
     let commands = reader.read_all();
     assert_eq!(commands.len(), 3);
@@ -78,14 +78,14 @@ fn flush_is_idempotent() {
     let bus: &dyn Bus = &deferred;
     let mut reader = bus.subscribe::<TestCommand>();
 
-    deferred.set_deferred(true);
+    deferred.begin_deferred();
     bus.publish(TestCommand {
         command: "once".into(),
         sequence: 1,
     });
 
-    deferred.flush();
-    deferred.flush(); // second flush should be a no-op
+    deferred.end_deferred();
+    deferred.end_deferred(); // second flush should be a no-op
 
     let commands = reader.read_all();
     assert_eq!(commands.len(), 1, "message delivered exactly once despite double flush");
@@ -99,7 +99,7 @@ fn latest_value_in_deferred_mode() {
     let bus: &dyn Bus = &deferred;
     let mut reader = bus.subscribe::<SensorReading>();
 
-    deferred.set_deferred(true);
+    deferred.begin_deferred();
     for i in 1..=3 {
         bus.publish(SensorReading {
             value: i as f64,
@@ -107,7 +107,7 @@ fn latest_value_in_deferred_mode() {
         });
     }
 
-    deferred.flush();
+    deferred.end_deferred();
 
     // LatestValue: only the last published value is visible
     let msg = reader.read().expect("should have a value after flush");
@@ -125,24 +125,24 @@ fn transport_and_id_delegate_to_inner() {
     assert_eq!(deferred.id(), "my-bus-id");
 }
 
-/// Subscribers created on DeferredBus receive messages after flush.
+/// Subscribers created via DeferredBus (which delegates to the inner bus)
+/// receive messages after end_deferred flushes the pending batch.
 #[test]
 fn subscribe_goes_to_inner() {
     let inner = Arc::new(InProcessBus::new("test"));
     let deferred = DeferredBus::new(inner);
     let bus: &dyn Bus = &deferred;
 
-    // Subscribe via deferred wrapper
+    // Subscribe via DeferredBus — delegates to inner bus
     let mut reader = bus.subscribe::<SensorReading>();
 
-    // Publish in deferred mode, flush, verify subscriber receives
-    deferred.set_deferred(true);
+    // Publish in deferred mode, end_deferred flushes atomically
+    deferred.begin_deferred();
     bus.publish(SensorReading {
         value: 99.0,
         source: "src".into(),
     });
-    deferred.set_deferred(false);
-    deferred.flush();
+    deferred.end_deferred();
 
     let msg = reader.read().expect("subscriber on deferred bus should receive flushed messages");
     assert!((msg.value - 99.0).abs() < 1e-12);

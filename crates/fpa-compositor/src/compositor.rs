@@ -468,10 +468,9 @@ impl Compositor {
         //
         // Deferred mode is always restored on exit from Phase 2 — including
         // fault paths — so the bus is never left in deferred state.
-        self.bus.set_deferred(true);
+        self.bus.begin_deferred();
         let phase2_result = self.run_phase2_stepping(dt);
-        self.bus.set_deferred(false);
-        self.bus.flush();
+        self.bus.end_deferred();
         phase2_result?;
 
         // Assemble shared context from current tick's partition outputs

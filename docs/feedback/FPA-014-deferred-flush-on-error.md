@@ -6,7 +6,7 @@
 
 When Phase 2 faults (a partition's `step()` returns an error), the compositor
 currently extracts deferred-mode stepping into a helper that guarantees
-`set_deferred(false)` and `flush()` run regardless of whether all partitions
+`end_deferred()` runs regardless of whether all partitions
 stepped successfully. This means messages from successfully-stepped partitions
 are flushed to the bus even when the tick is considered faulted.
 

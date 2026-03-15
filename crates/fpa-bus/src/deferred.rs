@@ -25,9 +25,10 @@ struct PendingMessage {
 
 /// Deferred state: the flag and pending queue are guarded by a single
 /// mutex so that `publish_erased` atomically observes the flag and
-/// enqueues in one critical section. This prevents a TOCTOU race where
-/// a concurrent `set_deferred(false)` + `flush()` could drain the queue
-/// between the flag check and the enqueue, stranding messages.
+/// enqueues in one critical section, and `end_deferred` atomically
+/// disables and drains in one critical section. This prevents a TOCTOU
+/// race where a concurrent publisher could slip between flag change
+/// and queue drain, stranding or bypassing messages.
 struct DeferredState {
     deferred: bool,
     pending: Vec<PendingMessage>,
@@ -38,12 +39,17 @@ struct DeferredState {
 ///
 /// When `deferred` is false (the default), all operations delegate directly
 /// to the inner bus. When `deferred` is true, `publish_erased` queues
-/// messages instead of delivering them. Subscriptions always go to the
+/// messages instead of delivering them. Subscriptions delegate to the
 /// inner bus — subscribers see flushed messages on the next read after
-/// `flush()`.
+/// `end_deferred()`.
 ///
 /// The deferred flag and pending queue share a single mutex to satisfy
 /// the `Send + Sync` contract of the `Bus` trait under concurrent use.
+/// The primary API is `begin_deferred()` / `end_deferred()`, which
+/// provide correct-by-construction lifecycle management. `end_deferred()`
+/// atomically disables deferral and drains the queue in a single critical
+/// section, eliminating any window where a concurrent publisher could
+/// bypass the queue or interleave with the flushed batch.
 pub struct DeferredBus {
     inner: Arc<dyn Bus>,
     state: Mutex<DeferredState>,
@@ -63,21 +69,31 @@ impl DeferredBus {
         }
     }
 
-    /// Enable or disable deferred mode.
+    /// Enter deferred mode: subsequent publishes are queued instead of
+    /// delivered immediately.
     ///
-    /// When enabled, published messages are queued instead of delivered.
-    /// When disabled, published messages go directly to the inner bus.
-    pub fn set_deferred(&self, deferred: bool) {
-        self.state.lock().unwrap().deferred = deferred;
+    /// Pair with `end_deferred()` to flush the queued batch and return
+    /// to passthrough mode.
+    pub fn begin_deferred(&self) {
+        self.state.lock().unwrap().deferred = true;
     }
 
-    /// Flush all pending messages to the inner bus.
+    /// Exit deferred mode and flush all pending messages to the inner bus.
     ///
-    /// Messages are delivered in the order they were published, preserving
-    /// the Queued delivery semantic's ordering guarantee (FPA-007).
-    pub fn flush(&self) {
-        let messages: Vec<PendingMessage> = {
+    /// Atomically disables deferred mode and drains the pending queue in a
+    /// single critical section. Messages are then delivered to the inner bus
+    /// in publish order, preserving the Queued delivery semantic's ordering
+    /// guarantee (FPA-007).
+    ///
+    /// This combined operation eliminates the TOCTOU window that would exist
+    /// if disable and flush were separate calls: no concurrent publisher can
+    /// observe deferred=false while messages remain in the queue.
+    ///
+    /// Safe to call when not in deferred mode (no-op).
+    pub fn end_deferred(&self) {
+        let messages = {
             let mut state = self.state.lock().unwrap();
+            state.deferred = false;
             std::mem::take(&mut state.pending)
         };
         for msg in messages {
