@@ -51,7 +51,7 @@ fn same_result_inprocess_and_network() {
         5,
     );
     let state_network = run_compositor_with_bus(
-        Arc::new(NetworkBus::new("test-network")),
+        Arc::new(NetworkBus::new("test-network").with_framework_codecs()),
         5,
     );
     assert_eq!(state_inprocess, state_network);
@@ -69,7 +69,7 @@ fn same_result_all_three_transports() {
         10,
     );
     let state_network = run_compositor_with_bus(
-        Arc::new(NetworkBus::new("test-network")),
+        Arc::new(NetworkBus::new("test-network").with_framework_codecs()),
         10,
     );
     assert_eq!(state_inprocess, state_async);
@@ -95,7 +95,7 @@ fn compositor_bus_reports_correct_transport() {
     let partitions3: Vec<Box<dyn fpa_contract::Partition>> = vec![
         Box::new(Counter::new("a")),
     ];
-    let compositor3 = Compositor::new(partitions3, Arc::new(NetworkBus::new("nb")));
+    let compositor3 = Compositor::new(partitions3, Arc::new(NetworkBus::new("nb").with_framework_codecs()));
     assert_eq!(compositor3.bus().transport(), Transport::Network);
 }
 
@@ -105,7 +105,7 @@ fn shared_context_published_on_all_transports() {
     for (label, bus) in [
         ("inprocess", Arc::new(InProcessBus::new("ip")) as Arc<dyn Bus>),
         ("async", Arc::new(AsyncBus::new("ab")) as Arc<dyn Bus>),
-        ("network", Arc::new(NetworkBus::new("nb")) as Arc<dyn Bus>),
+        ("network", Arc::new(NetworkBus::new("nb").with_framework_codecs()) as Arc<dyn Bus>),
     ] {
         let mut reader = bus.subscribe::<SharedContext>();
 
@@ -163,7 +163,7 @@ fn nested_compositors_with_different_transports() {
         Box::new(Counter::new("A")),
         Box::new(inner),
     ];
-    let mut outer = Compositor::new(outer_partitions, Arc::new(NetworkBus::new("outer-network")))
+    let mut outer = Compositor::new(outer_partitions, Arc::new(NetworkBus::new("outer-network").with_framework_codecs()))
         .with_id("orchestrator");
 
     outer.init().unwrap();
@@ -198,7 +198,7 @@ fn full_lifecycle_with_each_transport() {
     for (label, bus) in [
         ("inprocess", Arc::new(InProcessBus::new("ip")) as Arc<dyn Bus>),
         ("async", Arc::new(AsyncBus::new("ab")) as Arc<dyn Bus>),
-        ("network", Arc::new(NetworkBus::new("nb")) as Arc<dyn Bus>),
+        ("network", Arc::new(NetworkBus::new("nb").with_framework_codecs()) as Arc<dyn Bus>),
     ] {
         let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
             Box::new(Counter::new("a")),
@@ -236,8 +236,8 @@ fn dump_load_round_trip_with_each_transport() {
          Arc::new(AsyncBus::new("b1")) as Arc<dyn Bus>,
          Arc::new(AsyncBus::new("b2")) as Arc<dyn Bus>),
         ("network",
-         Arc::new(NetworkBus::new("b1")) as Arc<dyn Bus>,
-         Arc::new(NetworkBus::new("b2")) as Arc<dyn Bus>),
+         Arc::new(NetworkBus::new("b1").with_framework_codecs()) as Arc<dyn Bus>,
+         Arc::new(NetworkBus::new("b2").with_framework_codecs()) as Arc<dyn Bus>),
     ] {
         // Run compositor 1 for 5 ticks and dump
         let partitions1: Vec<Box<dyn fpa_contract::Partition>> = vec![

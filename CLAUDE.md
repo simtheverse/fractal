@@ -57,6 +57,21 @@ hacks that make tests pass.
 
 `PLAN.md` tracks all phases and current progress.
 
+## Reference domain applications
+
+`docs/design/REFERENCE_DOMAINS.md` describes four real-world applications (restaurant
+kiosk, flight dynamics sim, collaborative document editor, industrial process controller)
+that anchor framework design against concrete use cases. When designing APIs, writing
+tests, or evaluating architectural changes, validate against these domains — they
+exercise every major FPA capability and expose where abstractions break down.
+
+## Principles checklist
+
+`docs/design/PRINCIPLES_CHECKLIST.md` contains 41 spec-traced principles organized by
+category (structural, communication, lifecycle, state, fault handling, events, testing,
+configuration). Each has a concrete violation criterion. Before merging any framework
+change, check it against the principles and the reference domains.
+
 ## Development philosophy
 - When considering solutions, think critically and challenge assumptions, including the specification (the prototype aims to inform the spec after all.) 
   - Anything is up for grabs, but the best, most effective, and most sustainable solution should be selected.

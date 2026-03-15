@@ -7,3 +7,6 @@ edition.workspace = true
 fpa-contract = { path = "../fpa-contract" }
 fpa-bus = { path = "../fpa-bus" }
 fpa-compositor = { path = "../fpa-compositor" }
+fpa-config = { path = "../fpa-config" }
+toml = { workspace = true }
+serde = { workspace = true }

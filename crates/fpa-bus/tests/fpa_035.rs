@@ -1,15 +1,16 @@
 // FPA-035 — Parameterized Bus Tests
 //
-// Verifies that InProcessBus and AsyncBus produce identical behavior for all
-// delivery semantics. Each test scenario is defined as a generic function and
-// invoked with both bus implementations.
+// Verifies that InProcessBus, AsyncBus, and NetworkBus produce identical
+// behavior for all delivery semantics. Each test scenario is defined as a
+// generic function and invoked with all three bus implementations.
 
 use fpa_bus::{AsyncBus, Bus, BusExt, BusReader, InProcessBus, NetworkBus, Transport};
 use fpa_contract::{DeliverySemantic, Message};
+use serde::{Deserialize, Serialize};
 
 // --- Test message types ----------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Temperature(f64);
 
 impl Message for Temperature {
@@ -18,7 +19,7 @@ impl Message for Temperature {
     const DELIVERY: DeliverySemantic = DeliverySemantic::LatestValue;
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Command(String);
 
 impl Message for Command {
@@ -27,7 +28,7 @@ impl Message for Command {
     const DELIVERY: DeliverySemantic = DeliverySemantic::Queued;
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Counter(f64);
 
 impl Message for Counter {
@@ -54,6 +55,11 @@ fn transport_reports_correct_variant_inprocess() {
 #[test]
 fn transport_reports_correct_variant_async() {
     transport_reports_correct_variant(AsyncBus::new("t"), Transport::Async);
+}
+
+#[test]
+fn transport_reports_correct_variant_network() {
+    transport_reports_correct_variant(NetworkBus::new("t"), Transport::Network);
 }
 
 fn latest_value_keeps_only_last(bus: impl Bus, transport: Transport) {
@@ -88,6 +94,11 @@ fn latest_value_keeps_only_last_async() {
     latest_value_keeps_only_last(AsyncBus::new("t"), Transport::Async);
 }
 
+#[test]
+fn latest_value_keeps_only_last_network() {
+    latest_value_keeps_only_last(NetworkBus::new("t"), Transport::Network);
+}
+
 fn queued_preserves_all_in_order(bus: impl Bus, transport: Transport) {
     let mut reader = bus.subscribe::<Command>();
 
@@ -117,6 +128,11 @@ fn queued_preserves_all_in_order_async() {
     queued_preserves_all_in_order(AsyncBus::new("t"), Transport::Async);
 }
 
+#[test]
+fn queued_preserves_all_in_order_network() {
+    queued_preserves_all_in_order(NetworkBus::new("t"), Transport::Network);
+}
+
 fn queued_read_one_at_a_time(bus: impl Bus, transport: Transport) {
     let mut reader = bus.subscribe::<Command>();
 
@@ -138,6 +154,11 @@ fn queued_read_one_at_a_time_inprocess() {
 #[test]
 fn queued_read_one_at_a_time_async() {
     queued_read_one_at_a_time(AsyncBus::new("t"), Transport::Async);
+}
+
+#[test]
+fn queued_read_one_at_a_time_network() {
+    queued_read_one_at_a_time(NetworkBus::new("t"), Transport::Network);
 }
 
 fn multiple_subscribers_all_receive(bus: impl Bus, transport: Transport) {
@@ -166,6 +187,11 @@ fn multiple_subscribers_all_receive_inprocess() {
 #[test]
 fn multiple_subscribers_all_receive_async() {
     multiple_subscribers_all_receive(AsyncBus::new("t"), Transport::Async);
+}
+
+#[test]
+fn multiple_subscribers_all_receive_network() {
+    multiple_subscribers_all_receive(NetworkBus::new("t"), Transport::Network);
 }
 
 fn latest_value_multiple_subscribers(bus: impl Bus, transport: Transport) {
@@ -208,6 +234,11 @@ fn latest_value_multiple_subscribers_async() {
     latest_value_multiple_subscribers(AsyncBus::new("t"), Transport::Async);
 }
 
+#[test]
+fn latest_value_multiple_subscribers_network() {
+    latest_value_multiple_subscribers(NetworkBus::new("t"), Transport::Network);
+}
+
 fn read_all_latest_value_returns_at_most_one(bus: impl Bus, transport: Transport) {
     let mut reader = bus.subscribe::<Temperature>();
 
@@ -243,6 +274,11 @@ fn read_all_latest_value_returns_at_most_one_async() {
     read_all_latest_value_returns_at_most_one(AsyncBus::new("t"), Transport::Async);
 }
 
+#[test]
+fn read_all_latest_value_returns_at_most_one_network() {
+    read_all_latest_value_returns_at_most_one(NetworkBus::new("t"), Transport::Network);
+}
+
 fn no_messages_before_subscribe(bus: impl Bus, transport: Transport) {
     bus.publish(Command("pre".into()));
 
@@ -261,6 +297,11 @@ fn no_messages_before_subscribe_inprocess() {
 #[test]
 fn no_messages_before_subscribe_async() {
     no_messages_before_subscribe(AsyncBus::new("t"), Transport::Async);
+}
+
+#[test]
+fn no_messages_before_subscribe_network() {
+    no_messages_before_subscribe(NetworkBus::new("t"), Transport::Network);
 }
 
 fn buses_are_independent(bus_a: impl Bus, bus_b: impl Bus, transport: Transport) {
@@ -295,20 +336,24 @@ fn buses_are_independent_async() {
     buses_are_independent(AsyncBus::new("a"), AsyncBus::new("b"), Transport::Async);
 }
 
+#[test]
+fn buses_are_independent_network() {
+    buses_are_independent(
+        NetworkBus::new("a"),
+        NetworkBus::new("b"),
+        Transport::Network,
+    );
+}
+
 // --- Compositor-workflow simulation (FPA-035) --------------------------------
-//
-// NOTE: Full compositor-level parameterized testing (same compositor config
-// running under InProcess vs Async) requires the Compositor to accept a generic
-// bus type (`Compositor<B: Bus>`) rather than `InProcessBus` directly. The Bus
-// trait is not object-safe due to generic methods, so `dyn Bus` is not possible.
-// See docs/feedback/FPA-004.md for the detailed analysis and recommendation.
 //
 // The tests below simulate a compositor-like workflow at the bus level to verify
 // that all three bus implementations produce identical results for a multi-tick
-// publish/subscribe pattern.
+// publish/subscribe pattern. NetworkBus uses codec registration to verify real
+// serialization round-trips in these workflow tests.
 
 /// Shared context published each compositor tick (LatestValue semantic).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct SharedContext {
     tick: u32,
     value: f64,
@@ -321,7 +366,7 @@ impl Message for SharedContext {
 }
 
 /// Event log produced each tick (Queued semantic).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct TickEvent(u32);
 
 impl Message for TickEvent {
@@ -388,6 +433,15 @@ fn compositor_workflow_simulation_network() {
     compositor_workflow_simulation(NetworkBus::new("comp"), "Network");
 }
 
+#[cfg(feature = "json-codec")]
+#[test]
+fn compositor_workflow_simulation_network_serialized() {
+    let bus = NetworkBus::new("comp");
+    bus.register_codec::<SharedContext>();
+    bus.register_codec::<TickEvent>();
+    compositor_workflow_simulation(bus, "Network-serialized");
+}
+
 /// Verifies that subscribing mid-workflow only sees messages from that point forward,
 /// simulating a partition that joins a running compositor.
 fn late_subscriber_workflow(bus: impl Bus, label: &str) {
@@ -445,4 +499,13 @@ fn late_subscriber_workflow_async() {
 #[test]
 fn late_subscriber_workflow_network() {
     late_subscriber_workflow(NetworkBus::new("late"), "Network");
+}
+
+#[cfg(feature = "json-codec")]
+#[test]
+fn late_subscriber_workflow_network_serialized() {
+    let bus = NetworkBus::new("late");
+    bus.register_codec::<SharedContext>();
+    bus.register_codec::<TickEvent>();
+    late_subscriber_workflow(bus, "Network-serialized");
 }

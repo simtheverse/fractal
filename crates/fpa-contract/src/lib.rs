@@ -1,5 +1,8 @@
 //! Contract traits, message types, and delivery semantics for the Fractal Partition Architecture.
 
+/// The version of the fpa-contract crate, for provenance tracking.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod error;
 pub mod message;
 pub mod partition;
