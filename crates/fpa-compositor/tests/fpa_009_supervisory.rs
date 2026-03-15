@@ -91,16 +91,17 @@ async fn partition_runs_own_processing_loop() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // The partition should have accumulated steps autonomously
-    let store = compositor.output_store().lock().unwrap();
-    let entry = store.get("counter-1").expect("partition should have written state");
-    let count = entry
-        .state()
-        .and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .unwrap();
+    let count = {
+        let store = compositor.output_store().lock().unwrap();
+        let entry = store.get("counter-1").expect("partition should have written state");
+        entry
+            .state()
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .unwrap()
+    };
     assert!(count > 1, "partition should have stepped multiple times, got {}", count);
-    drop(store);
 
     compositor.async_shutdown().await.unwrap();
 }
@@ -323,26 +324,26 @@ async fn multiple_partitions_run_independently() {
     wait_for_output(&store, "counter-a", Duration::from_secs(2)).await;
     wait_for_output(&store, "counter-b", Duration::from_secs(2)).await;
 
-    let s = store.lock().unwrap();
-
-    let count_a = s
-        .get("counter-a")
-        .and_then(|e| e.state()).and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .expect("counter-a should have state");
-
-    let count_b = s
-        .get("counter-b")
-        .and_then(|e| e.state()).and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .expect("counter-b should have state");
+    let (count_a, count_b) = {
+        let s = store.lock().unwrap();
+        let a = s
+            .get("counter-a")
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .expect("counter-a should have state");
+        let b = s
+            .get("counter-b")
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .expect("counter-b should have state");
+        (a, b)
+    };
 
     assert!(count_a > 0, "counter-a should have stepped");
     assert!(count_b > 0, "counter-b should have stepped");
 
-    drop(s);
     compositor.async_shutdown().await.unwrap();
 }
 
@@ -463,20 +464,22 @@ async fn per_partition_step_interval() {
     // Let them run for a bit
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let s = store.lock().unwrap();
-    let fast_count = s
-        .get("fast")
-        .and_then(|e| e.state()).and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .unwrap_or(0);
-
-    let slow_count = s
-        .get("slow")
-        .and_then(|e| e.state()).and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .unwrap_or(0);
+    let (fast_count, slow_count) = {
+        let s = store.lock().unwrap();
+        let fast = s
+            .get("fast")
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .unwrap_or(0);
+        let slow = s
+            .get("slow")
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .unwrap_or(0);
+        (fast, slow)
+    };
 
     assert!(
         fast_count > slow_count,
@@ -485,7 +488,6 @@ async fn per_partition_step_interval() {
         slow_count
     );
 
-    drop(s);
     compositor.async_shutdown().await.unwrap();
 }
 

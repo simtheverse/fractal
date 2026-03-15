@@ -16,8 +16,8 @@ fn messages_are_named() {
 /// Messages have version numbers.
 #[test]
 fn messages_are_versioned() {
-    assert!(CounterOutput::VERSION >= 1);
-    assert!(AccumulatorOutput::VERSION >= 1);
+    assert_eq!(CounterOutput::VERSION, 1);
+    assert_eq!(AccumulatorOutput::VERSION, 1);
 }
 
 /// Messages declare their delivery semantic.
@@ -34,7 +34,7 @@ fn messages_are_statically_typed() {
     // The field is statically typed — compiler enforces this.
     let _count: u64 = output.count;
 
-    let output = AccumulatorOutput { total: 3.14 };
+    let output = AccumulatorOutput { total: 3.15 };
     let _total: f64 = output.total;
 }
 

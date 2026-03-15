@@ -60,6 +60,13 @@ impl<M> JsonCodec<M> {
 }
 
 #[cfg(feature = "json-codec")]
+impl<M> Default for JsonCodec<M> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "json-codec")]
 impl<M: NetworkMessage> MessageCodec for JsonCodec<M> {
     fn serialize(&self, msg: &dyn Any) -> Vec<u8> {
         let typed = msg

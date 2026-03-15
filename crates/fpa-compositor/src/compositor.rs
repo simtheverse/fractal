@@ -48,6 +48,7 @@ pub enum LifecycleOp {
 /// - Phase 2: step partitions with direct signal checks between each;
 ///   shared context assembled after tick barrier
 /// - Phase 3: event evaluation, request processing, final signal check
+///
 /// Fault handling wraps every partition call.
 pub struct Compositor {
     /// Unique identifier for this compositor instance.
@@ -228,10 +229,9 @@ impl Compositor {
         emitter_identity: impl Into<String>,
     ) -> Result<(), PartitionError> {
         let signal_id = signal_id.into();
-        let id_clone = self.id.clone();
         if !self.direct_signal_registry.is_registered(&signal_id) {
             return Err(self.make_error(
-                &id_clone,
+                &self.id,
                 "emit_direct_signal",
                 format!("signal '{}' is not registered", signal_id),
             ));
@@ -276,7 +276,7 @@ impl Compositor {
         let requests = std::mem::take(&mut self.pending_requests);
         match &self.relay_policy {
             RelayPolicy::Forward => requests,
-            RelayPolicy::Transform(f) => requests.into_iter().map(|r| f(r)).collect(),
+            RelayPolicy::Transform(f) => requests.into_iter().map(f).collect(),
             RelayPolicy::Suppress => Vec::new(),
             RelayPolicy::Aggregate => {
                 if requests.is_empty() {
@@ -722,7 +722,7 @@ impl Compositor {
                     // next swap makes the loaded snapshot visible as the
                     // pre-step read buffer for event evaluation and signals.
                     self.double_buffer
-                        .write(&partition.id().to_string(), envelope_value.clone());
+                        .write(partition.id(), envelope_value.clone());
                 }
             }
         }

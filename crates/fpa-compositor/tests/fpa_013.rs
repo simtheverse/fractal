@@ -90,7 +90,7 @@ fn registry_scoping() {
 
     // Duplicate registration is idempotent
     registry.register("foo");
-    assert_eq!(registry.registered_ids().len(), 1);
+    assert_eq!(registry.len(), 1);
 }
 
 /// Two-layer scenario: direct signal from inner compositor bypasses relay chain.

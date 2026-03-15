@@ -100,13 +100,7 @@ fn canonical_inputs_version_scoped() {
 /// Tolerances are declared in the contract module, not in individual tests.
 #[test]
 fn tolerances_declared_in_contract() {
-    // The tolerance constant exists and is positive
-    assert!(
-        ContractTolerances::FLOAT_TOLERANCE > 0.0,
-        "float tolerance should be positive"
-    );
-
-    // Version-scoped tolerances exist
+    // Version-scoped tolerances exist and are positive
     let v1_tol = ContractTolerances::float_tolerance_for_version(ContractVersion::V1);
     let v2_tol = ContractTolerances::float_tolerance_for_version(ContractVersion::V2);
     assert!(v1_tol > 0.0);
