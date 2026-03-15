@@ -67,6 +67,7 @@ hacks that make tests pass.
 - Treat the root cause, not the symptom.
 - For FPA to be successful, the prototype must be of the highest quality and a scalable bootstrap for FPA applications.
 - Uphold the FPA principles in all solutions- fractality, symmetry, drop-in replacability, runtime configurability, etc.
+- Dare to address core architectural tensions and design instead of avoiding or working around them.
 
 ## Testing discipline
 
@@ -81,6 +82,14 @@ hacks that make tests pass.
 
 - `docs/feedback/FPA-004-network.md` — NetworkBus serialization gap (deferred to Phase 5 Track J2)
 - `docs/feedback/FPA-030.md` — Diataxis documentation structure (deferred to Phase 7)
+
+## Pull requests
+
+- Do not include "Generated with Claude Code" or similar attribution lines in PR bodies
+- To edit a PR after creation, use the REST API (not `gh pr edit`, which fails on
+  this repo due to a Projects Classic deprecation error):
+  `gh api repos/simtheverse/fractal/pulls/N --method PATCH -f body="..."`
+- Create PRs with `gh pr create --title "..." --body "..."`
 
 ## PR review threads
 
