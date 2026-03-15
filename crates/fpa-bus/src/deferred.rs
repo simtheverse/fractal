@@ -14,7 +14,6 @@
 use crate::bus::{Bus, CloneableMessage, ErasedReader, Transport};
 use fpa_contract::message::DeliverySemantic;
 use std::any::TypeId;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A pending message captured during deferred mode.
@@ -24,18 +23,30 @@ struct PendingMessage {
     msg: Box<dyn CloneableMessage>,
 }
 
+/// Deferred state: the flag and pending queue are guarded by a single
+/// mutex so that `publish_erased` atomically observes the flag and
+/// enqueues in one critical section. This prevents a TOCTOU race where
+/// a concurrent `set_deferred(false)` + `flush()` could drain the queue
+/// between the flag check and the enqueue, stranding messages.
+struct DeferredState {
+    deferred: bool,
+    pending: Vec<PendingMessage>,
+}
+
 /// Bus wrapper that queues messages during deferred mode and flushes them
 /// after the tick barrier.
 ///
 /// When `deferred` is false (the default), all operations delegate directly
-/// to the inner bus with minimal overhead (atomic load on the fast path).
-/// When `deferred` is true, `publish_erased` queues messages instead of
-/// delivering them. Subscriptions always go to the inner bus — subscribers
-/// see flushed messages on the next read after `flush()`.
+/// to the inner bus. When `deferred` is true, `publish_erased` queues
+/// messages instead of delivering them. Subscriptions always go to the
+/// inner bus — subscribers see flushed messages on the next read after
+/// `flush()`.
+///
+/// The deferred flag and pending queue share a single mutex to satisfy
+/// the `Send + Sync` contract of the `Bus` trait under concurrent use.
 pub struct DeferredBus {
     inner: Arc<dyn Bus>,
-    deferred: AtomicBool,
-    pending: Mutex<Vec<PendingMessage>>,
+    state: Mutex<DeferredState>,
 }
 
 impl DeferredBus {
@@ -45,8 +56,10 @@ impl DeferredBus {
     pub fn new(inner: Arc<dyn Bus>) -> Self {
         Self {
             inner,
-            deferred: AtomicBool::new(false),
-            pending: Mutex::new(Vec::new()),
+            state: Mutex::new(DeferredState {
+                deferred: false,
+                pending: Vec::new(),
+            }),
         }
     }
 
@@ -55,7 +68,7 @@ impl DeferredBus {
     /// When enabled, published messages are queued instead of delivered.
     /// When disabled, published messages go directly to the inner bus.
     pub fn set_deferred(&self, deferred: bool) {
-        self.deferred.store(deferred, Ordering::SeqCst);
+        self.state.lock().unwrap().deferred = deferred;
     }
 
     /// Flush all pending messages to the inner bus.
@@ -64,8 +77,8 @@ impl DeferredBus {
     /// the Queued delivery semantic's ordering guarantee (FPA-007).
     pub fn flush(&self) {
         let messages: Vec<PendingMessage> = {
-            let mut pending = self.pending.lock().unwrap();
-            std::mem::take(&mut *pending)
+            let mut state = self.state.lock().unwrap();
+            std::mem::take(&mut state.pending)
         };
         for msg in messages {
             self.inner.publish_erased(msg.type_id, msg.semantic, msg.msg);
@@ -85,16 +98,18 @@ impl Bus for DeferredBus {
         semantic: DeliverySemantic,
         msg: Box<dyn CloneableMessage>,
     ) {
-        if self.deferred.load(Ordering::SeqCst) {
-            let mut pending = self.pending.lock().unwrap();
-            pending.push(PendingMessage {
-                type_id,
-                semantic,
-                msg,
-            });
-        } else {
-            self.inner.publish_erased(type_id, semantic, msg);
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.deferred {
+                state.pending.push(PendingMessage {
+                    type_id,
+                    semantic,
+                    msg,
+                });
+                return;
+            }
         }
+        self.inner.publish_erased(type_id, semantic, msg);
     }
 
     fn subscribe_erased(

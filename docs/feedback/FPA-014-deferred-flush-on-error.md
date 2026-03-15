@@ -30,12 +30,23 @@ tick messages reaching the bus may be misleading:
 
 ## Current Behavior
 
-Flush always runs. This is the simpler, more predictable choice. It matches
-the SharedContext double buffer, which also publishes after a partially-faulted
-tick (successfully-stepped partitions still contribute state).
+Deferred bus messages are always flushed, even when Phase 2 faults. However,
+SharedContext is NOT published on a faulted tick — the compositor returns
+early before the SharedContext publish block. This creates an asymmetry:
+
+- **Bus messages:** flushed on error (partially-completed tick's messages
+  reach subscribers)
+- **SharedContext:** not published on error (subscribers see the previous
+  tick's context)
+
+Successfully-stepped partitions still contribute state to the write buffer
+via `contribute_state()`, but that state is never assembled into SharedContext
+and published on the bus when the tick faults.
 
 ## Spec Implication
 
 FPA-014 should eventually specify flush-on-error semantics explicitly, aligned
-with the recovery model. Until recovery semantics are designed (FPA-011 scope),
-the current flush-always behavior is acceptable.
+with the recovery model. The current asymmetry between bus messages (flushed)
+and SharedContext (not published) on faulted ticks may need resolution — either
+both should flush, or neither should. Until recovery semantics are designed
+(FPA-011 scope), the current behavior is acceptable.
