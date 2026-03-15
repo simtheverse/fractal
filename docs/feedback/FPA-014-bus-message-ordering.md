@@ -20,13 +20,14 @@ messages the same one-tick-delay as SharedContext via the double buffer.
 
 ### How it works
 
-1. Before Phase 2, the compositor sets `deferred(true)` on the bus
+1. Before Phase 2, the compositor calls `begin_deferred()` on the bus
 2. All `publish_erased` calls during stepping queue messages instead of
    delivering them
 3. After all partitions have stepped and contributed state, the compositor
-   sets `deferred(false)` and calls `flush()`
+   calls `end_deferred()`, which atomically disables deferred mode and
+   drains the pending queue in a single critical section
 4. Queued messages are delivered to the inner bus in publish order
-5. SharedContext is published after flush (non-deferred, direct delivery)
+5. SharedContext is published after the deferred flush (direct delivery)
 
 ### Result
 

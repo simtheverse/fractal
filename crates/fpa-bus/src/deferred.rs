@@ -49,7 +49,10 @@ struct DeferredState {
 /// provide correct-by-construction lifecycle management. `end_deferred()`
 /// atomically disables deferral and drains the queue in a single critical
 /// section, eliminating any window where a concurrent publisher could
-/// bypass the queue or interleave with the flushed batch.
+/// bypass the queue or strand messages. Note: the actual delivery to the
+/// inner bus happens after the lock is released, so a concurrent publisher
+/// could interleave with the flushed batch — the guarantee is that no
+/// message is lost or bypassed, not batch-contiguous delivery.
 pub struct DeferredBus {
     inner: Arc<dyn Bus>,
     state: Mutex<DeferredState>,
