@@ -523,15 +523,12 @@ impl Compositor {
                 .collect();
         }
 
-        // Step 3: Process bus-mediated transition requests (FPA-006).
+        // Step 2: Process bus-mediated transition requests (FPA-006).
         for request in self.transition_reader.read_all() {
             self.process_transition_request(request)?;
         }
 
-        // Steps 2,4: Collect outputs, relay qualified requests.
-        // (Outputs collected during Phase 2 loop above; relay via drain_relayed_requests.)
-
-        // Step 5: Check for pending direct signals.
+        // Step 3: Check for pending direct signals.
         self.collect_inner_signals();
 
         Ok(())
@@ -678,15 +675,15 @@ impl Compositor {
             self.last_dump_result = Some(self.dump()?);
         }
 
-        // Drain bus-mediated load requests
-        for load_req in self.load_reader.read_all() {
-            if self.pending_load.is_none() {
-                self.pending_load = Some(load_req.fragment);
-            }
-        }
-
+        // Drain bus-mediated load requests (FIFO — each applied in order,
+        // last effectively wins, consistent with programmatic request_load).
+        let bus_loads: Vec<_> = self.load_reader.read_all();
+        // Programmatic request_load takes priority (applied first)
         if let Some(fragment) = self.pending_load.take() {
             self.apply_state_fragment(fragment)?;
+        }
+        for load_req in bus_loads {
+            self.apply_state_fragment(load_req.fragment)?;
         }
         Ok(())
     }

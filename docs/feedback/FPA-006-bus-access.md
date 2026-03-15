@@ -14,9 +14,11 @@ paths specified by the spec are unreachable.
 ## Resolution
 
 Changed `Box<dyn Bus>` to `Arc<dyn Bus>` in both `Compositor` and
-`SupervisoryCompositor`. This enables shared ownership: the compositor
-holds an `Arc<dyn Bus>`, and partitions can receive a clone of the same
-`Arc` at construction time via `Compositor::bus_arc()`.
+`SupervisoryCompositor`. This enables shared ownership: callers create
+an `Arc<dyn Bus>`, clone it for any partitions that need bus access,
+then pass both the partitions and the `Arc` to the compositor constructor.
+For partitions spawned later (via lifecycle ops), `Compositor::bus_arc()`
+provides access to the shared bus reference.
 
 The `Partition` trait remains strategy-neutral — bus access is opt-in at
 the implementation level. Partitions that need bus access accept an
