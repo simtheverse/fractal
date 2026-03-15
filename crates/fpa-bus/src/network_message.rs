@@ -44,7 +44,10 @@ pub trait MessageCodec: Send + Sync {
 /// `MessageCodec` directly for custom formats without this feature.
 #[cfg(feature = "json-codec")]
 pub struct JsonCodec<M> {
-    _marker: std::marker::PhantomData<M>,
+    // PhantomData<fn() -> M> makes JsonCodec<M> Send+Sync regardless of M,
+    // since it doesn't actually own or reference an M. This avoids requiring
+    // M: Sync on the codec when M is already Send (as Message requires).
+    _marker: std::marker::PhantomData<fn() -> M>,
 }
 
 #[cfg(feature = "json-codec")]
@@ -57,7 +60,7 @@ impl<M> JsonCodec<M> {
 }
 
 #[cfg(feature = "json-codec")]
-impl<M: NetworkMessage + Sync> MessageCodec for JsonCodec<M> {
+impl<M: NetworkMessage> MessageCodec for JsonCodec<M> {
     fn serialize(&self, msg: &dyn Any) -> Vec<u8> {
         let typed = msg
             .downcast_ref::<M>()

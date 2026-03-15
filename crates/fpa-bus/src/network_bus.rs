@@ -35,6 +35,9 @@ struct SubscriberState {
     semantic: DeliverySemantic,
 }
 
+/// Shared codec registry, referenced by both the bus and all readers.
+type CodecRegistry = Arc<Mutex<HashMap<TypeId, Arc<dyn MessageCodec>>>>;
+
 /// Network bus with transparent codec-based serialization.
 ///
 /// When a codec is registered for a message type (via `register_codec()`),
@@ -47,7 +50,7 @@ struct SubscriberState {
 pub struct NetworkBus {
     id: String,
     channels: Arc<Mutex<HashMap<TypeId, ChannelState>>>,
-    codecs: Arc<Mutex<HashMap<TypeId, Arc<dyn MessageCodec>>>>,
+    codecs: CodecRegistry,
 }
 
 impl NetworkBus {
@@ -65,6 +68,9 @@ impl NetworkBus {
     /// publish and deserialized on read. Without registration, the bus
     /// falls back to clone-based delivery for this type.
     ///
+    /// Codecs can be registered at any time — both existing and future
+    /// subscribers will use the codec for deserialization.
+    ///
     /// This method is always available regardless of feature flags.
     /// Use it to register codecs for custom serialization formats.
     pub fn register_custom_codec(&self, type_id: TypeId, codec: Arc<dyn MessageCodec>) {
@@ -77,7 +83,7 @@ impl NetworkBus {
     /// Convenience method that creates a `JsonCodec<M>` and registers it.
     /// Requires the `json-codec` feature.
     #[cfg(feature = "json-codec")]
-    pub fn register_codec<M: crate::network_message::NetworkMessage + Sync>(&self) {
+    pub fn register_codec<M: crate::network_message::NetworkMessage>(&self) {
         self.register_custom_codec(
             TypeId::of::<M>(),
             Arc::new(crate::network_message::JsonCodec::<M>::new()),
@@ -120,9 +126,12 @@ impl Bus for NetworkBus {
         _semantic: DeliverySemantic,
         msg: Box<dyn CloneableMessage>,
     ) {
-        // If a codec is registered, serialize to bytes. Otherwise fall back
-        // to clone-based delivery (same as InProcessBus).
+        // Serialize before acquiring the channels lock to minimize lock scope.
         let codec = self.get_codec(type_id);
+        let serialized = codec.as_ref().map(|c| {
+            let any_ref: &dyn Any = &*msg;
+            c.serialize(any_ref)
+        });
 
         let mut channels = self.channels.lock().unwrap();
         Self::ensure_channel(&mut channels, type_id);
@@ -131,13 +140,6 @@ impl Bus for NetworkBus {
 
         // Prune dead subscribers
         channel.subscribers.retain(|w| w.strong_count() > 0);
-
-        // Serialize once if codec is available, then clone bytes to each subscriber.
-        // Without a codec, clone the message object for each subscriber.
-        let serialized = codec.as_ref().map(|c| {
-            let any_ref: &dyn Any = &*msg;
-            c.serialize(any_ref)
-        });
 
         for weak_sub in &channel.subscribers {
             if let Some(sub) = weak_sub.upgrade() {
@@ -163,8 +165,6 @@ impl Bus for NetworkBus {
         type_id: TypeId,
         semantic: DeliverySemantic,
     ) -> Box<dyn ErasedReader> {
-        let codec = self.get_codec(type_id);
-
         let mut channels = self.channels.lock().unwrap();
         Self::ensure_channel(&mut channels, type_id);
 
@@ -178,9 +178,13 @@ impl Bus for NetworkBus {
 
         channel.subscribers.push(Arc::downgrade(&sub_state));
 
+        // Share the codec registry with the reader so it can look up
+        // codecs dynamically at read time. This means codecs registered
+        // after subscription are still available for deserialization.
         Box::new(NetworkReader {
             state: sub_state,
-            codec,
+            codecs: Arc::clone(&self.codecs),
+            type_id,
         })
     }
 
@@ -195,16 +199,21 @@ impl Bus for NetworkBus {
 
 struct NetworkReader {
     state: Arc<Mutex<SubscriberState>>,
-    codec: Option<Arc<dyn MessageCodec>>,
+    codecs: CodecRegistry,
+    type_id: TypeId,
 }
 
 impl NetworkReader {
+    fn get_codec(&self) -> Option<Arc<dyn MessageCodec>> {
+        let codecs = self.codecs.lock().unwrap();
+        codecs.get(&self.type_id).cloned()
+    }
+
     fn resolve_item(&self, item: DeliveredItem) -> Box<dyn Any + Send> {
         match item {
             DeliveredItem::Serialized(bytes) => {
-                self.codec
-                    .as_ref()
-                    .expect("received serialized item but reader has no codec")
+                self.get_codec()
+                    .expect("received serialized item but no codec is registered")
                     .deserialize(&bytes)
             }
             DeliveredItem::Cloned(any) => any,
