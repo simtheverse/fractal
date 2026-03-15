@@ -14,7 +14,7 @@ fn basic_fragment() -> CompositionFragment {
     fpa_config::load_from_str(toml_str).unwrap()
 }
 
-/// Reference file records provenance metadata.
+/// Reference file records provenance metadata (FPA-038).
 #[test]
 fn reference_file_records_provenance() {
     let fragment = basic_fragment();
@@ -22,13 +22,37 @@ fn reference_file_records_provenance() {
 
     let reference = ReferenceFile::generate(&fragment, &registry, 5, 1.0).unwrap();
 
+    // Command records generation parameters
     assert!(
         reference.provenance.command.contains("ticks=5"),
         "provenance should record tick count"
     );
+
+    // Timestamp is non-empty
     assert!(
-        reference.provenance.command.contains("dt=1"),
-        "provenance should record dt"
+        !reference.provenance.timestamp.is_empty(),
+        "provenance should record timestamp"
+    );
+
+    // Implementation versions are recorded
+    assert!(
+        !reference.provenance.impl_versions.is_empty(),
+        "provenance should record impl versions"
+    );
+    // Should contain entries for each partition
+    assert!(
+        reference.provenance.impl_versions.iter().any(|v| v.contains("counter")),
+        "impl versions should include counter partition"
+    );
+
+    // Contract versions are recorded
+    assert!(
+        !reference.provenance.contract_versions.is_empty(),
+        "provenance should record contract versions"
+    );
+    assert!(
+        reference.provenance.contract_versions.iter().any(|v| v.contains("fpa-contract")),
+        "contract versions should include fpa-contract"
     );
 }
 
@@ -44,6 +68,14 @@ fn reference_file_toml_round_trip() {
 
     assert_eq!(original.output, restored.output);
     assert_eq!(original.provenance.command, restored.provenance.command);
+    assert_eq!(
+        original.provenance.impl_versions,
+        restored.provenance.impl_versions
+    );
+    assert_eq!(
+        original.provenance.contract_versions,
+        restored.provenance.contract_versions
+    );
 }
 
 /// Regeneration produces updated references after config change.

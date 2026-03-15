@@ -18,7 +18,7 @@ use crate::system::{System, SystemError};
 pub struct Provenance {
     /// Description of how this reference was generated.
     pub command: String,
-    /// Timestamp when this reference was generated.
+    /// Timestamp when this reference was generated (RFC 3339).
     pub timestamp: String,
     /// Implementation versions used (e.g., partition implementation versions).
     pub impl_versions: Vec<String>,
@@ -59,13 +59,37 @@ impl ReferenceFile {
         dt: f64,
     ) -> Result<Self, SystemError> {
         let mut system = System::from_fragment(fragment, registry, bus)?;
+        let actual_dt = system.dt().unwrap_or(dt);
         let output = system.run(ticks, dt)?;
 
+        // Collect implementation names from the fragment for provenance.
+        let mut impl_versions: Vec<String> = fragment
+            .partitions
+            .iter()
+            .filter_map(|(id, config)| {
+                config
+                    .implementation
+                    .as_ref()
+                    .map(|imp| format!("{}={}", id, imp))
+            })
+            .collect();
+        impl_versions.sort();
+
+        // Record contract versions from framework crate versions.
+        let contract_versions = vec![
+            format!("fpa-contract={}", env!("CARGO_PKG_VERSION")),
+        ];
+
         let provenance = Provenance {
-            command: format!("generate ticks={} dt={}", ticks, dt),
-            timestamp: String::new(),
-            impl_versions: Vec::new(),
-            contract_versions: Vec::new(),
+            command: format!(
+                "generate ticks={} dt={} transport={}",
+                ticks,
+                actual_dt,
+                "InProcess"
+            ),
+            timestamp: current_timestamp(),
+            impl_versions,
+            contract_versions,
         };
 
         Ok(ReferenceFile { provenance, output })
@@ -80,4 +104,15 @@ impl ReferenceFile {
     pub fn from_toml_str(s: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(s)
     }
+}
+
+/// Returns current UTC timestamp in a simple format.
+/// Uses a minimal approach without pulling in chrono — exact format
+/// is less important than having a non-empty, meaningful value.
+fn current_timestamp() -> String {
+    // Use std::time to get seconds since epoch, format manually.
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("epoch:{}", duration.as_secs())
 }

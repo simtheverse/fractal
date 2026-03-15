@@ -1,24 +1,32 @@
 // FPA-033 — Composition Test: Layer 0 and Layer 1 Compositor Tests
 //
 // Verifies that compositors correctly assemble and coordinate partitions,
-// and that failure localization distinguishes wiring errors from partition errors.
+// that inter-partition state is observable through SharedContext, and that
+// failure localization distinguishes wiring errors from partition errors.
 
 use std::sync::Arc;
 
-use fpa_bus::InProcessBus;
+use fpa_bus::{BusExt, BusReader, InProcessBus};
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::{Accumulator, Counter};
-use fpa_contract::{Partition, StateContribution};
+use fpa_contract::{Partition, SharedContext, StateContribution};
 
 /// Layer 0: compose Counter + Accumulator, verify inter-partition communication
-/// through the compositor's shared context and state aggregation.
+/// through SharedContext published on the bus. The compositor assembles
+/// partition outputs into SharedContext each tick, which is the primary
+/// mechanism for inter-partition state observation.
 #[test]
-fn layer_0_counter_accumulator_composition() {
+fn layer_0_inter_partition_communication_via_shared_context() {
+    let bus = Arc::new(InProcessBus::new("layer-0"));
+
+    // Subscribe to SharedContext before creating the compositor so we can
+    // observe the compositor's published state.
+    let mut ctx_reader = bus.subscribe::<SharedContext>();
+
     let partitions: Vec<Box<dyn Partition>> = vec![
         Box::new(Counter::new("counter")),
         Box::new(Accumulator::new("accumulator")),
     ];
-    let bus = Arc::new(InProcessBus::new("layer-0"));
     let mut compositor = Compositor::new(partitions, bus);
 
     compositor.init().unwrap();
@@ -28,17 +36,27 @@ fn layer_0_counter_accumulator_composition() {
         compositor.run_tick(dt).unwrap();
     }
 
-    let state = compositor.dump().unwrap();
-    let partitions = state.as_table().unwrap()["partitions"].as_table().unwrap();
+    // SharedContext is the inter-partition communication mechanism.
+    // Verify that both partitions' state is observable through it.
+    let ctx = ctx_reader
+        .read()
+        .expect("SharedContext should be published on the bus after run_tick");
+    assert_eq!(ctx.tick, 10, "SharedContext tick should match compositor tick");
 
-    // Counter should have counted 10 steps
-    let counter_sc = StateContribution::from_toml(&partitions["counter"]).unwrap();
-    let count = counter_sc.state.as_table().unwrap()["count"].as_integer().unwrap();
+    let state_table = ctx.state.as_table().unwrap();
+
+    // Counter's state is visible to other partitions via SharedContext
+    let counter_envelope = StateContribution::from_toml(&state_table["counter"]).unwrap();
+    let count = counter_envelope.state.as_table().unwrap()["count"]
+        .as_integer()
+        .unwrap();
     assert_eq!(count, 10);
 
-    // Accumulator should have accumulated 10 * dt
-    let acc_sc = StateContribution::from_toml(&partitions["accumulator"]).unwrap();
-    let total = acc_sc.state.as_table().unwrap()["total"].as_float().unwrap();
+    // Accumulator's state is visible to other partitions via SharedContext
+    let acc_envelope = StateContribution::from_toml(&state_table["accumulator"]).unwrap();
+    let total = acc_envelope.state.as_table().unwrap()["total"]
+        .as_float()
+        .unwrap();
     let expected = 10.0 * dt;
     assert!(
         (total - expected).abs() < 1e-12,

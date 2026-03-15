@@ -43,13 +43,16 @@ impl From<PartitionError> for SystemError {
 /// Provides the canonical operator entry point for FPA applications.
 pub struct System {
     compositor: Compositor,
+    /// Timestep from the fragment's system config, if specified.
+    dt: Option<f64>,
 }
 
 impl System {
     /// Build a system from a composition fragment.
     ///
-    /// Iterates the fragment's partition entries, creates each via the registry,
-    /// and assembles a compositor with the given bus.
+    /// Iterates the fragment's partition entries in sorted order (for
+    /// deterministic composition), creates each via the registry, and
+    /// assembles a compositor with the given bus.
     pub fn from_fragment(
         fragment: &CompositionFragment,
         registry: &PartitionRegistry,
@@ -57,7 +60,14 @@ impl System {
     ) -> Result<Self, SystemError> {
         let mut partitions: Vec<Box<dyn Partition>> = Vec::new();
 
-        for (id, config) in &fragment.partitions {
+        // Sort partition IDs for deterministic ordering. HashMap iteration
+        // order is non-deterministic, which would cause the compositor's
+        // stepping order to vary across runs.
+        let mut partition_ids: Vec<&String> = fragment.partitions.keys().collect();
+        partition_ids.sort();
+
+        for id in partition_ids {
+            let config = &fragment.partitions[id];
             let impl_name = config.implementation.as_deref().ok_or_else(|| {
                 SystemError::Config(format!(
                     "partition '{}' has no implementation specified",
@@ -78,24 +88,39 @@ impl System {
             partitions.push(partition);
         }
 
+        // Extract timestep from system config if present.
+        let dt = fragment
+            .system
+            .get("timestep")
+            .and_then(|v| v.as_float());
+
         let compositor = Compositor::new(partitions, bus);
-        Ok(System { compositor })
+        Ok(System { compositor, dt })
     }
 
     /// Run the system for a given number of ticks.
     ///
+    /// Uses the timestep from the fragment's system config if available,
+    /// otherwise uses the provided `dt`.
+    ///
     /// Performs: init -> run_tick x N -> dump -> shutdown -> return state.
     pub fn run(&mut self, ticks: u64, dt: f64) -> Result<toml::Value, SystemError> {
+        let actual_dt = self.dt.unwrap_or(dt);
         self.compositor.init()?;
 
         for _ in 0..ticks {
-            self.compositor.run_tick(dt)?;
+            self.compositor.run_tick(actual_dt)?;
         }
 
         let state = self.compositor.dump()?;
         self.compositor.shutdown()?;
 
         Ok(state)
+    }
+
+    /// The timestep from the fragment's system config, if specified.
+    pub fn dt(&self) -> Option<f64> {
+        self.dt
     }
 
     /// Access the compositor for advanced operations.
