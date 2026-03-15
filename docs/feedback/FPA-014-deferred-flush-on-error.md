@@ -1,6 +1,9 @@
 # FPA-014 Finding: Flush-on-Error Semantics for DeferredBus
 
-## Status: Open — deferred to recovery phase
+## Status: Open — context document created, pending recovery phase design
+
+See `docs/design/FLUSH_ON_ERROR_DESIGN.md` for full design context and candidate
+approaches.
 
 ## Finding
 

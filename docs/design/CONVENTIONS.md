@@ -136,6 +136,16 @@ complete, consistent state of all partitions after tick N — no partition's out
 missing or partial. Partitions do not read shared context during Phase 2; it is available
 on the bus for external consumers and for the compositor's own Phase 3 event evaluation.
 
+The intra-tick isolation guarantee applies uniformly to both inter-partition communication
+channels. State observation via shared context is isolated by the double buffer:
+partitions read from the read buffer containing tick N-1 outputs. Bus messages published
+by partitions during Phase 2 shall not be visible to other partitions until after all
+Phase 2 `step()` calls have completed. The compositor shall ensure that any bus messages
+published during Phase 2 are held until after the tick barrier, then made available for
+consumption starting in tick N+1. Both channels thus exhibit one-tick-delay semantics:
+output produced by partition A during tick N is available to other partitions during tick
+N+1, never during tick N.
+
 **Phase 3 — Post-tick processing:**
 
 1. Evaluate all event conditions against the partition state as it existed at the
@@ -183,6 +193,14 @@ or concurrently. This allows compositors to choose the strategy appropriate to t
 transport mode: sequential for in-process transport (simple, no threading overhead),
 concurrent for network transport (avoids serialized round-trips).
 
+Without explicit isolation of bus messages during Phase 2, messages published by a
+partition stepped early in the sequence would be immediately visible to partitions
+stepped later, creating a stepping-order dependence. The result would differ depending on
+which partition steps first, violating the ordering-insensitivity guarantee. Ensuring bus
+messages are held until after the tick barrier gives them the same one-tick-delay
+semantics as the double-buffered shared context, making both communication channels
+uniformly ordering-insensitive.
+
 Under sequential stepping, direct signal polling between partition steps (FPA-013)
 gives safety-critical signals a worst-case latency of one partition's step duration.
 Under concurrent stepping, the worst case is the longest partition's step duration.
@@ -225,6 +243,10 @@ coordinates partition lifecycle, owns the bus, arbitrates requests, and handles 
   Phase 2.
 - Fail: Event conditions are evaluated after event actions have been applied, causing
   cascading event firing within a single tick.
+- Pass: A bus message published by partition A during tick N's Phase 2 is not readable
+  by partition B during the same Phase 2, regardless of stepping order.
+- Pass: Under any stepping order, the result of a multi-partition tick is identical —
+  bus message isolation eliminates ordering sensitivity for both communication channels.
 - Fail: Shared context is assembled before all partitions have completed their current
   tick.
 
@@ -391,9 +413,9 @@ everything at once.
 **Statement:** System-level tests shall exercise the full stack from
 configuration to final output. Each system test shall trace to one or more
 requirement identifiers from this specification. System tests shall use the same entry
-points available to an operator or embedder — layer 0 composition fragments, the
-orchestrator's public API, or the command-line interface — and shall not bypass
-composition or initialization to reach internal partition interfaces directly.
+points available to an operator or embedder — the standard composition function
+(FPA-015), the orchestrator's public API, or the command-line interface — and shall not
+bypass composition or initialization to reach internal partition interfaces directly.
 
 **Rationale:** System tests verify end-to-end properties that emerge from the
 interaction of all layers: an entity reaching an expected final state, an event sequence
@@ -486,9 +508,9 @@ the contract boundary where they originate.
 
 **Statement:** Compositor tests shall assert **compositional properties** — invariants
 that must hold when partitions are correctly assembled — rather than exact output values.
-Compositional properties include: messages sent by one partition are received by the
-intended consumer; conserved quantities are preserved across partition boundaries within
-stated tolerances; execution ordering respects the declared dependency graph; and state
+Compositional properties include: every message delivered at the end of tick N is
+available for consumption by the intended consumer during tick N+1; conserved quantities
+are preserved across partition boundaries within stated tolerances; execution ordering respects the declared dependency graph; and state
 that one partition publishes is visible to its declared consumers in the same tick or the
 next tick as specified by the contract. Where a compositor test requires regression
 baselines with exact output values, those baselines shall be generated mechanically from
@@ -500,7 +522,15 @@ output values in compositor tests couples them to every partition's implementati
 details, so that a legitimate improvement in any partition invalidates compositor-level
 golden files across the layer boundary. Compositional properties are stable across
 implementation changes because they derive from the composition structure, not from any
-specific partition's output values. Where exact regression baselines are unavoidable,
+specific partition's output values.
+
+Message conservation is defined per-tick rather than over the lifetime of a run. Under
+one-tick-delay semantics (FPA-014), messages produced during the last tick of a run are
+delivered but never consumed because no subsequent tick executes. This is an inherent
+property of the one-tick-delay model, not a conservation violation. Per-tick
+conservation — "every message delivered at end of tick N is available in tick N+1" —
+cannot be violated at the last tick because no tick N+1 exists in which the invariant
+could fail. Where exact regression baselines are unavoidable,
 mechanical generation from the current implementations makes regeneration a deterministic
 operation triggered by any partition change, rather than a manual cross-team coordination
 effort.
@@ -514,6 +544,10 @@ effort.
   command can regenerate them from the current implementations without manual editing.
 - Fail: A compositor test asserts exact output values that were captured from a specific
   implementation and maintained as a hand-edited golden file.
+- Pass: In a multi-tick run, every bus message delivered at the end of tick N is readable
+  by its intended consumer during tick N+1.
+- Pass: A run's last tick producing messages that are never consumed is not treated as a
+  conservation violation.
 - Fail: Replacing a partition with a contract-conforming alternative causes compositor
   test failures unrelated to composition correctness.
 
