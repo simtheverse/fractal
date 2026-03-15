@@ -44,8 +44,8 @@ hacks that make tests pass.
 
 - **Partition trait** is strategy-neutral: `init/step/shutdown/contribute_state/load_state`.
   Both compositors implement it, enabling fractal nesting.
-- **Box<dyn Bus>** for runtime transport selection. Partitions never know which transport
-  is in use.
+- **Arc<dyn Bus>** for runtime transport selection with shared ownership. Partitions
+  never know which transport is in use.
 - **StateContribution** envelope wraps all `contribute_state()` output with freshness
   metadata (`state`, `fresh`, `age_ms`). Defined in fpa-contract.
 - **Synchronous shutdown is a signal, not a confirmation** under supervisory coordination
@@ -55,10 +55,7 @@ hacks that make tests pass.
 
 ## Research plan
 
-`PLAN.md` tracks all phases. Phases 0-4 are complete. Current state:
-- 282 tests across 6 crates
-- Phases 5-7 remain (network serialization, system tests, determinism/replaceability
-  evaluation, synthesis)
+`PLAN.md` tracks all phases and current progress.
 
 ## Development philosophy
 - When considering solutions, think critically and challenge assumptions, including the specification (the prototype aims to inform the spec after all.) 
@@ -80,8 +77,7 @@ hacks that make tests pass.
 
 ## Open feedback files
 
-- `docs/feedback/FPA-004-network.md` — NetworkBus serialization gap (deferred to Phase 5 Track J2)
-- `docs/feedback/FPA-030.md` — Diataxis documentation structure (deferred to Phase 7)
+Open findings and spec implications live in `docs/feedback/`.
 
 ## Pull requests
 
