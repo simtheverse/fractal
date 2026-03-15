@@ -1,0 +1,18 @@
+# Inter-partition communication: Sensor → Follower → Recorder
+# Exercises bus publish/subscribe, LatestValue + Queued delivery,
+# config-driven construction, and complex state.
+
+[system]
+timestep = 1.0
+
+[partitions.sensor]
+implementation = "Sensor"
+scale = 1.5
+offset = 0.0
+
+[partitions.follower]
+implementation = "Follower"
+threshold = 5.0
+
+[partitions.recorder]
+implementation = "Recorder"

@@ -5,7 +5,6 @@
 use std::fs;
 
 use fpa_testkit::reference::ReferenceFile;
-use fpa_testkit::registry::PartitionRegistry;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -31,7 +30,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let registry = PartitionRegistry::with_test_partitions();
+    let registry = fpa_testkit::registry::with_all_test_partitions();
     let reference = ReferenceFile::generate(&fragment, &registry, ticks, dt).unwrap_or_else(|e| {
         eprintln!("Failed to generate reference: {}", e);
         std::process::exit(1);

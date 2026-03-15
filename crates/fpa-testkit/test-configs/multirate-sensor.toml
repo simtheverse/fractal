@@ -1,0 +1,18 @@
+# Multi-rate bus communication: fast Sensor + normal Follower + Counter
+# Sensor at 4x rate publishes readings each sub-tick; Follower at 1x
+# sees only the last reading per outer tick (LatestValue semantic).
+
+[system]
+timestep = 1.0
+
+[partitions.fast_sensor]
+implementation = "Sensor"
+scale = 1.0
+offset = 0.0
+
+[partitions.follower]
+implementation = "Follower"
+threshold = 3.0
+
+[partitions.counter]
+implementation = "Counter"
