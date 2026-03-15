@@ -134,7 +134,8 @@ fn failure_localization_wiring_vs_partition() {
     let registry = PartitionRegistry::with_test_partitions();
 
     // Wiring error: unknown implementation
-    let result = registry.create("NonexistentImpl", "test-partition", &toml::Value::Table(Default::default()));
+    let dummy_bus: Arc<dyn fpa_bus::Bus> = Arc::new(InProcessBus::new("dummy"));
+    let result = registry.create("NonexistentImpl", "test-partition", &toml::Value::Table(Default::default()), &dummy_bus);
     match result {
         Err(err) => assert!(
             err.message.contains("unknown implementation"),

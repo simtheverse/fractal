@@ -14,9 +14,15 @@ use fpa_events::{EventDefinition, EventEngine};
 
 use crate::compositor::Compositor;
 
-/// Factory function that creates a partition from its ID and config parameters.
-pub type PartitionFactory =
-    Box<dyn Fn(&str, &toml::Value) -> Result<Box<dyn Partition>, PartitionError> + Send>;
+/// Factory function that creates a partition from its ID, config, and bus.
+///
+/// The bus is the compositor's layer bus — partitions that need to publish
+/// or subscribe to messages use this to participate in inter-partition
+/// communication. Partitions that don't need the bus simply ignore it.
+pub type PartitionFactory = Box<
+    dyn Fn(&str, &toml::Value, &Arc<dyn Bus>) -> Result<Box<dyn Partition>, PartitionError>
+        + Send,
+>;
 
 /// Registry mapping implementation name strings to partition factory functions.
 ///
@@ -40,22 +46,26 @@ impl PartitionRegistry {
     }
 
     /// Convenience: register a simple factory that only needs the partition ID.
+    ///
+    /// The config and bus parameters are ignored. Use `register` for partitions
+    /// that need config or bus access.
     pub fn register_simple<F>(&mut self, name: impl Into<String>, factory: F)
     where
         F: Fn(&str) -> Box<dyn Partition> + Send + 'static,
     {
         self.factories.insert(
             name.into(),
-            Box::new(move |id, _config| Ok(factory(id))),
+            Box::new(move |id, _config, _bus| Ok(factory(id))),
         );
     }
 
-    /// Create a partition instance from its implementation name, ID, and config.
+    /// Create a partition instance from its implementation name, ID, config, and bus.
     pub fn create(
         &self,
         impl_name: &str,
         partition_id: &str,
         config: &toml::Value,
+        bus: &Arc<dyn Bus>,
     ) -> Result<Box<dyn Partition>, PartitionError> {
         let factory = self.factories.get(impl_name).ok_or_else(|| {
             PartitionError::new(
@@ -64,7 +74,7 @@ impl PartitionRegistry {
                 format!("unknown implementation '{}'", impl_name),
             )
         })?;
-        factory(partition_id, config)
+        factory(partition_id, config, bus)
     }
 
     /// Pre-load Counter, Accumulator, and Doubler factories for testing.
@@ -116,6 +126,9 @@ impl From<PartitionError> for ComposeError {
 /// from the fragment's partition entries using the registry, wires events
 /// from the fragment, and returns a ready-to-use compositor.
 ///
+/// The bus is passed to each partition factory so that partitions needing
+/// inter-partition communication are guaranteed to use the compositor's bus.
+///
 /// Partition iteration follows `BTreeMap` ordering (alphabetical by ID),
 /// which determines stepping order within a tick.
 pub fn compose(
@@ -141,7 +154,7 @@ pub fn compose(
         })?;
 
         let partition = registry
-            .create(impl_name, id, &config_value)
+            .create(impl_name, id, &config_value, &bus)
             .map_err(ComposeError::Partition)?;
         partitions.push(partition);
     }
