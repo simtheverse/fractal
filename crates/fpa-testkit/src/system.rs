@@ -78,17 +78,24 @@ impl System {
     /// otherwise uses the provided `dt`.
     ///
     /// Performs: init -> run_tick x N -> dump -> shutdown -> return state.
+    /// Shutdown is always attempted, even if ticking or dumping fails.
     pub fn run(&mut self, ticks: u64, dt: f64) -> Result<toml::Value, SystemError> {
         let actual_dt = self.dt.unwrap_or(dt);
         self.compositor.init()?;
 
-        for _ in 0..ticks {
-            self.compositor.run_tick(actual_dt)?;
-        }
+        let result = (|| {
+            for _ in 0..ticks {
+                self.compositor.run_tick(actual_dt)?;
+            }
+            self.compositor.dump().map_err(SystemError::from)
+        })();
 
-        let state = self.compositor.dump()?;
-        self.compositor.shutdown()?;
+        // Always attempt shutdown, even on error.
+        let shutdown_result = self.compositor.shutdown().map_err(SystemError::from);
 
+        // Return the first error encountered (tick/dump error takes priority).
+        let state = result?;
+        shutdown_result?;
         Ok(state)
     }
 

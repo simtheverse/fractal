@@ -18,8 +18,9 @@ use std::sync::{Arc, Mutex, Weak};
 
 /// A delivered item: either serialized bytes (when codec is available)
 /// or a cloned object (fallback when no codec is registered).
+/// Serialized bytes are shared via Arc to avoid per-subscriber copies.
 enum DeliveredItem {
-    Serialized(Vec<u8>),
+    Serialized(Arc<[u8]>),
     Cloned(Box<dyn Any + Send>),
 }
 
@@ -127,10 +128,11 @@ impl Bus for NetworkBus {
         msg: Box<dyn CloneableMessage>,
     ) {
         // Serialize before acquiring the channels lock to minimize lock scope.
+        // Bytes are wrapped in Arc so all subscribers share the same buffer.
         let codec = self.get_codec(type_id);
-        let serialized = codec.as_ref().map(|c| {
+        let serialized: Option<Arc<[u8]>> = codec.as_ref().map(|c| {
             let any_ref: &dyn Any = &*msg;
-            c.serialize(any_ref)
+            Arc::from(c.serialize(any_ref))
         });
 
         let mut channels = self.channels.lock().unwrap();
@@ -211,10 +213,10 @@ impl NetworkReader {
 
     fn resolve_item(&self, item: DeliveredItem) -> Box<dyn Any + Send> {
         match item {
-            DeliveredItem::Serialized(bytes) => {
+            DeliveredItem::Serialized(ref bytes) => {
                 self.get_codec()
                     .expect("received serialized item but no codec is registered")
-                    .deserialize(&bytes)
+                    .deserialize(bytes)
             }
             DeliveredItem::Cloned(any) => any,
         }

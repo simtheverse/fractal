@@ -109,13 +109,10 @@ impl ReferenceFile {
     }
 }
 
-/// Returns current UTC timestamp in a simple format.
-/// Uses a minimal approach without pulling in chrono — exact format
-/// is less important than having a non-empty, meaningful value.
+/// Returns current UTC timestamp as epoch seconds (integer string).
 fn current_timestamp() -> String {
-    // Use std::time to get seconds since epoch, format manually.
     let duration = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    format!("epoch:{}", duration.as_secs())
+    duration.as_secs().to_string()
 }
