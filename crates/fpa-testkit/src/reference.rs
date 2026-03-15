@@ -20,8 +20,8 @@ pub struct Provenance {
     pub command: String,
     /// Timestamp when this reference was generated (RFC 3339 UTC).
     pub timestamp: String,
-    /// Implementation versions used (e.g., partition implementation versions).
-    pub impl_versions: Vec<String>,
+    /// Partition implementations used (e.g., "counter=Counter").
+    pub implementations: Vec<String>,
     /// Contract versions used.
     pub contract_versions: Vec<String>,
 }
@@ -64,7 +64,7 @@ impl ReferenceFile {
         let output = system.run(ticks, dt)?;
 
         // Collect implementation names from the fragment for provenance.
-        let mut impl_versions: Vec<String> = fragment
+        let mut implementations: Vec<String> = fragment
             .partitions
             .iter()
             .filter_map(|(id, config)| {
@@ -74,7 +74,7 @@ impl ReferenceFile {
                     .map(|imp| format!("{}={}", id, imp))
             })
             .collect();
-        impl_versions.sort();
+        implementations.sort();
 
         // Record contract versions. In a workspace where all crates share
         // a version, this is the workspace version. When versions diverge,
@@ -91,7 +91,7 @@ impl ReferenceFile {
                 transport
             ),
             timestamp: current_timestamp(),
-            impl_versions,
+            implementations,
             contract_versions,
         };
 

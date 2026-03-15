@@ -36,13 +36,13 @@ fn reference_file_records_provenance() {
 
     // Implementation versions are recorded
     assert!(
-        !reference.provenance.impl_versions.is_empty(),
-        "provenance should record impl versions"
+        !reference.provenance.implementations.is_empty(),
+        "provenance should record implementations"
     );
     // Should contain entries for each partition
     assert!(
-        reference.provenance.impl_versions.iter().any(|v| v.contains("counter")),
-        "impl versions should include counter partition"
+        reference.provenance.implementations.iter().any(|v| v.contains("counter")),
+        "implementations should include counter partition"
     );
 
     // Contract versions are recorded
@@ -69,8 +69,8 @@ fn reference_file_toml_round_trip() {
     assert_eq!(original.output, restored.output);
     assert_eq!(original.provenance.command, restored.provenance.command);
     assert_eq!(
-        original.provenance.impl_versions,
-        restored.provenance.impl_versions
+        original.provenance.implementations,
+        restored.provenance.implementations
     );
     assert_eq!(
         original.provenance.contract_versions,
