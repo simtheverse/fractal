@@ -223,28 +223,29 @@ impl NetworkReader {
 
 impl ErasedReader for NetworkReader {
     fn read_erased(&mut self) -> Option<Box<dyn Any + Send>> {
-        let mut state = self.state.lock().unwrap();
-        let item = match state.semantic {
-            DeliverySemantic::LatestValue => state.latest.take(),
-            DeliverySemantic::Queued => state.queue.pop_front(),
+        // Take the item under the lock, then deserialize outside it.
+        let item = {
+            let mut state = self.state.lock().unwrap();
+            match state.semantic {
+                DeliverySemantic::LatestValue => state.latest.take(),
+                DeliverySemantic::Queued => state.queue.pop_front(),
+            }
         }?;
         Some(self.resolve_item(item))
     }
 
     fn read_all_erased(&mut self) -> Vec<Box<dyn Any + Send>> {
-        let mut state = self.state.lock().unwrap();
-        match state.semantic {
-            DeliverySemantic::LatestValue => state
-                .latest
-                .take()
-                .into_iter()
-                .map(|item| self.resolve_item(item))
-                .collect(),
-            DeliverySemantic::Queued => state
-                .queue
-                .drain(..)
-                .map(|item| self.resolve_item(item))
-                .collect(),
-        }
+        // Drain all items under the lock, then deserialize outside it.
+        let items: Vec<DeliveredItem> = {
+            let mut state = self.state.lock().unwrap();
+            match state.semantic {
+                DeliverySemantic::LatestValue => state.latest.take().into_iter().collect(),
+                DeliverySemantic::Queued => state.queue.drain(..).collect(),
+            }
+        };
+        items
+            .into_iter()
+            .map(|item| self.resolve_item(item))
+            .collect()
     }
 }

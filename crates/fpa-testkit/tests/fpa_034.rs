@@ -1,8 +1,9 @@
-// FPA-034 — System Test: Operator Entry Point
+// FPA-034 — System Test: Batch Test Runner
 //
-// Verifies that the System type provides the canonical operator entry point
-// for FPA applications. Tests use System::from_fragment — never bypass
-// composition. Traces to FPA-001 (fractal composition) and FPA-009 (lifecycle).
+// Verifies that the System batch runner (built on fpa_compositor::compose)
+// exercises the full stack from configuration to final output. Tests use
+// System::from_fragment — never bypass composition.
+// Traces to FPA-001 (fractal composition) and FPA-009 (lifecycle).
 
 use std::sync::Arc;
 
