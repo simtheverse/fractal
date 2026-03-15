@@ -51,9 +51,7 @@ fn extract_requirement_ids(content: &str) -> Vec<String> {
             let columns: Vec<&str> = trimmed.split('|').collect();
             if columns.len() >= 2 {
                 let first_col = columns[1].trim();
-                if first_col.starts_with("FPA-") {
-                    // Verify the suffix is numeric
-                    let suffix = &first_col[4..];
+                if let Some(suffix) = first_col.strip_prefix("FPA-") {
                     if suffix.chars().all(|c| c.is_ascii_digit()) && !suffix.is_empty() {
                         ids.push(first_col.to_string());
                     }

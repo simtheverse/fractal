@@ -16,7 +16,7 @@ mod messages;
 pub use counter::Counter;
 pub use accumulator::Accumulator;
 pub use doubler::Doubler;
-pub use messages::{CounterOutput, AccumulatorOutput, DoublerOutput};
+pub use messages::{CounterOutput, AccumulatorOutput, DoublerOutput, TestCommand, SensorReading};
 
 /// Contract version identifier (FPA-039).
 ///

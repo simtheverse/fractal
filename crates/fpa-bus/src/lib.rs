@@ -2,12 +2,14 @@
 
 pub mod async_bus;
 pub mod bus;
+pub mod deferred;
 pub mod in_process;
 pub mod network_bus;
 pub mod network_message;
 
 pub use async_bus::AsyncBus;
 pub use bus::{Bus, BusExt, BusReader, CloneableMessage, ErasedReader, Transport, TypedReader};
+pub use deferred::DeferredBus;
 pub use in_process::InProcessBus;
 pub use network_bus::NetworkBus;
 pub use network_message::{MessageCodec, NetworkMessage};

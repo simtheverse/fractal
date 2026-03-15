@@ -5,6 +5,8 @@
 //! cannot propagate beyond the system boundary. Every emission is logged with
 //! identity and depth.
 
+use std::collections::HashSet;
+
 /// A direct signal that bypasses the relay chain.
 #[derive(Debug, Clone)]
 pub struct DirectSignal {
@@ -42,32 +44,34 @@ impl DirectSignal {
 #[derive(Debug, Clone, Default)]
 pub struct DirectSignalRegistry {
     /// Allowed signal identifiers.
-    allowed: Vec<String>,
+    allowed: HashSet<String>,
 }
 
 impl DirectSignalRegistry {
     /// Create a new empty registry.
     pub fn new() -> Self {
         Self {
-            allowed: Vec::new(),
+            allowed: HashSet::new(),
         }
     }
 
     /// Register a signal ID as allowed.
     pub fn register(&mut self, signal_id: impl Into<String>) {
-        let id = signal_id.into();
-        if !self.allowed.contains(&id) {
-            self.allowed.push(id);
-        }
+        self.allowed.insert(signal_id.into());
     }
 
     /// Check whether a signal ID is registered.
     pub fn is_registered(&self, signal_id: &str) -> bool {
-        self.allowed.iter().any(|s| s == signal_id)
+        self.allowed.contains(signal_id)
     }
 
-    /// Return the list of registered signal IDs.
-    pub fn registered_ids(&self) -> &[String] {
-        &self.allowed
+    /// Return the number of registered signal IDs.
+    pub fn len(&self) -> usize {
+        self.allowed.len()
+    }
+
+    /// Return whether the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.allowed.is_empty()
     }
 }

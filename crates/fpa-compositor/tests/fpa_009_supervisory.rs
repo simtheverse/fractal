@@ -91,16 +91,17 @@ async fn partition_runs_own_processing_loop() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // The partition should have accumulated steps autonomously
-    let store = compositor.output_store().lock().unwrap();
-    let entry = store.get("counter-1").expect("partition should have written state");
-    let count = entry
-        .state()
-        .and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .unwrap();
+    let count = {
+        let store = compositor.output_store().lock().unwrap();
+        let entry = store.get("counter-1").expect("partition should have written state");
+        entry
+            .state()
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .unwrap()
+    };
     assert!(count > 1, "partition should have stepped multiple times, got {}", count);
-    drop(store);
 
     compositor.async_shutdown().await.unwrap();
 }
@@ -323,26 +324,26 @@ async fn multiple_partitions_run_independently() {
     wait_for_output(&store, "counter-a", Duration::from_secs(2)).await;
     wait_for_output(&store, "counter-b", Duration::from_secs(2)).await;
 
-    let s = store.lock().unwrap();
-
-    let count_a = s
-        .get("counter-a")
-        .and_then(|e| e.state()).and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .expect("counter-a should have state");
-
-    let count_b = s
-        .get("counter-b")
-        .and_then(|e| e.state()).and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .expect("counter-b should have state");
+    let (count_a, count_b) = {
+        let s = store.lock().unwrap();
+        let a = s
+            .get("counter-a")
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .expect("counter-a should have state");
+        let b = s
+            .get("counter-b")
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .expect("counter-b should have state");
+        (a, b)
+    };
 
     assert!(count_a > 0, "counter-a should have stepped");
     assert!(count_b > 0, "counter-b should have stepped");
 
-    drop(s);
     compositor.async_shutdown().await.unwrap();
 }
 
@@ -435,6 +436,82 @@ async fn stale_partitions_detected() {
     // Instead verify via direct store inspection (already tested in staleness test above).
 }
 
+/// Faulted partition causes contribute_state to return an error.
+///
+/// A partition that faults stops producing output. After the heartbeat timeout
+/// passes, contribute_state() should return an error because the compositor
+/// detects the faulted partition and refuses to produce partial state.
+#[tokio::test]
+async fn faulted_partition_fails_contribute_state() {
+    let bus = InProcessBus::new("test-bus");
+
+    struct FailOnSecondStep {
+        id: String,
+        count: u32,
+    }
+
+    impl Partition for FailOnSecondStep {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn init(&mut self) -> Result<(), PartitionError> {
+            Ok(())
+        }
+        fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
+            self.count += 1;
+            if self.count >= 2 {
+                return Err(PartitionError::new(&self.id, "step", "intentional failure"));
+            }
+            Ok(())
+        }
+        fn shutdown(&mut self) -> Result<(), PartitionError> {
+            Ok(())
+        }
+        fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+            let mut t = toml::map::Map::new();
+            t.insert("count".to_string(), toml::Value::Integer(self.count as i64));
+            Ok(toml::Value::Table(t))
+        }
+        fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
+            Ok(())
+        }
+    }
+
+    // Use a good partition alongside the failing one so contribute_state doesn't
+    // short-circuit on fault for the entire compositor.
+    let good_counter = Counter::new("good");
+    let failing = FailOnSecondStep {
+        id: "failer".to_string(),
+        count: 0,
+    };
+
+    let mut compositor = SupervisoryCompositor::new(
+        "test",
+        vec![Box::new(good_counter), Box::new(failing)],
+        Arc::new(bus),
+        Duration::from_millis(30), // short heartbeat timeout
+    )
+    .with_step_interval(Duration::from_millis(5));
+
+    compositor.init().unwrap();
+
+    // Wait for the good partition to produce output
+    wait_for_output(compositor.output_store(), "good", Duration::from_secs(2)).await;
+
+    // Wait for the failer to fault
+    wait_for_fault(compositor.output_store(), "failer", Duration::from_secs(2)).await;
+
+    // Wait for the heartbeat timeout to expire
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    // contribute_state should return an error because a partition has faulted.
+    // The supervisory compositor checks for faults before contributing state.
+    let result = compositor.contribute_state();
+    assert!(result.is_err(), "contribute_state should error when a partition has faulted");
+
+    compositor.async_shutdown().await.unwrap_or_default();
+}
+
 /// Per-partition step intervals are respected.
 #[tokio::test]
 async fn per_partition_step_interval() {
@@ -463,20 +540,22 @@ async fn per_partition_step_interval() {
     // Let them run for a bit
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let s = store.lock().unwrap();
-    let fast_count = s
-        .get("fast")
-        .and_then(|e| e.state()).and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .unwrap_or(0);
-
-    let slow_count = s
-        .get("slow")
-        .and_then(|e| e.state()).and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .unwrap_or(0);
+    let (fast_count, slow_count) = {
+        let s = store.lock().unwrap();
+        let fast = s
+            .get("fast")
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .unwrap_or(0);
+        let slow = s
+            .get("slow")
+            .and_then(|e| e.state()).and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .unwrap_or(0);
+        (fast, slow)
+    };
 
     assert!(
         fast_count > slow_count,
@@ -485,7 +564,6 @@ async fn per_partition_step_interval() {
         slow_count
     );
 
-    drop(s);
     compositor.async_shutdown().await.unwrap();
 }
 

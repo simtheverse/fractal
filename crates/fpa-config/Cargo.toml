@@ -9,4 +9,3 @@ serde = { workspace = true }
 fpa-events = { path = "../fpa-events" }
 
 [dev-dependencies]
-fpa-events = { path = "../fpa-events" }

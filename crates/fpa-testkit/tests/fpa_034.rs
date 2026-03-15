@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use fpa_bus::InProcessBus;
 use fpa_config::CompositionFragment;
-use fpa_contract::StateContribution;
+use fpa_contract::{Partition, PartitionError, StateContribution};
 use fpa_testkit::registry::PartitionRegistry;
 use fpa_testkit::system::System;
 
@@ -111,4 +111,75 @@ implementation = "NonexistentPartition"
 
     let result = System::from_fragment(&fragment, &registry, bus);
     assert!(result.is_err());
+}
+
+// --- System error path tests ---
+
+/// A partition that always fails on init.
+struct InitFailer(String);
+
+impl Partition for InitFailer {
+    fn id(&self) -> &str { &self.0 }
+    fn init(&mut self) -> Result<(), PartitionError> {
+        Err(PartitionError::new(&self.0, "init", "init always fails"))
+    }
+    fn step(&mut self, _dt: f64) -> Result<(), PartitionError> { Ok(()) }
+    fn shutdown(&mut self) -> Result<(), PartitionError> { Ok(()) }
+    fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+        Ok(toml::Value::Table(toml::map::Map::new()))
+    }
+    fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> { Ok(()) }
+}
+
+/// A partition that always fails on step.
+struct StepFailer(String, bool);
+
+impl Partition for StepFailer {
+    fn id(&self) -> &str { &self.0 }
+    fn init(&mut self) -> Result<(), PartitionError> {
+        self.1 = true;
+        Ok(())
+    }
+    fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
+        Err(PartitionError::new(&self.0, "step", "step always fails"))
+    }
+    fn shutdown(&mut self) -> Result<(), PartitionError> { Ok(()) }
+    fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+        Ok(toml::Value::Table(toml::map::Map::new()))
+    }
+    fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> { Ok(()) }
+}
+
+/// System.run() returns error when partition init fails, and performs cleanup shutdown.
+#[test]
+fn system_run_returns_init_error() {
+    let toml_str = r#"
+[partitions.failer]
+implementation = "InitFailer"
+"#;
+    let fragment = fpa_config::load_from_str(toml_str).unwrap();
+    let mut registry = PartitionRegistry::new();
+    registry.register_simple("InitFailer", |id| Box::new(InitFailer(id.to_string())));
+    let bus = Arc::new(InProcessBus::new("bus"));
+
+    let mut system = System::from_fragment(&fragment, &registry, bus).unwrap();
+    let result = system.run(1, 1.0);
+    assert!(result.is_err(), "system.run should return init error");
+}
+
+/// System.run() returns error when partition step fails, and performs cleanup shutdown.
+#[test]
+fn system_run_returns_tick_error() {
+    let toml_str = r#"
+[partitions.failer]
+implementation = "StepFailer"
+"#;
+    let fragment = fpa_config::load_from_str(toml_str).unwrap();
+    let mut registry = PartitionRegistry::new();
+    registry.register_simple("StepFailer", |id| Box::new(StepFailer(id.to_string(), false)));
+    let bus = Arc::new(InProcessBus::new("bus"));
+
+    let mut system = System::from_fragment(&fragment, &registry, bus).unwrap();
+    let result = system.run(1, 1.0);
+    assert!(result.is_err(), "system.run should return tick error");
 }

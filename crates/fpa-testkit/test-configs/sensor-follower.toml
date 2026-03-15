@@ -1,0 +1,22 @@
+# Inter-partition communication: Sensor → Follower → Recorder
+# Exercises bus publish/subscribe, LatestValue + Queued delivery,
+# config-driven construction, and complex state.
+#
+# DeferredBus ensures bus messages published during step() are not
+# visible until the next tick, so partition stepping order does not
+# affect results (FPA-014 intra-tick isolation).
+
+[system]
+timestep = 1.0
+
+[partitions.sensor]
+implementation = "Sensor"
+scale = 1.5
+offset = 0.0
+
+[partitions.follower]
+implementation = "Follower"
+threshold = 5.0
+
+[partitions.recorder]
+implementation = "Recorder"

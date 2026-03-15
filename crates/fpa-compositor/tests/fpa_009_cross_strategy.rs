@@ -187,47 +187,50 @@ async fn supervisory_outer_embeds_lockstep_inner() {
     outer.run_tick(0.0).unwrap();
 
     // Check that both partitions produced state
-    let s = store.lock().unwrap();
+    let (outer_count, inner_count) = {
+        let s = store.lock().unwrap();
 
-    // The regular counter should have stepped
-    let outer_entry = s.get("outer-counter").expect("outer-counter should have output");
-    let outer_count = outer_entry
-        .state()
-        .and_then(|v| v.as_table())
-        .and_then(|t| t.get("count"))
-        .and_then(|v| v.as_integer())
-        .unwrap();
+        // The regular counter should have stepped
+        let outer_entry = s.get("outer-counter").expect("outer-counter should have output");
+        let oc = outer_entry
+            .state()
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("count"))
+            .and_then(|v| v.as_integer())
+            .unwrap();
+
+        // The lock-step inner compositor should have produced nested state.
+        // Note: the output store holds the raw contribute_state() output from the
+        // lock-step compositor. When used as a Partition, its contribute_state()
+        // calls dump(), which wraps each sub-partition in a StateContribution envelope.
+        let inner_entry = s.get("lockstep-inner").expect("lockstep-inner should have output");
+        let inner_state = inner_entry.state().unwrap().as_table().unwrap();
+
+        // The lock-step compositor's contribute_state returns a dump with partitions + system
+        assert!(
+            inner_state.contains_key("partitions"),
+            "lock-step inner should contribute state with partitions key"
+        );
+        assert!(
+            inner_state.contains_key("system"),
+            "lock-step inner should contribute state with system key"
+        );
+
+        // The inner counter should have been stepped — unwrap the StateContribution envelope
+        let inner_partitions = inner_state["partitions"].as_table().unwrap();
+        let inner_counter_sc = StateContribution::from_toml(&inner_partitions["inner-counter"]).unwrap();
+        let ic = inner_counter_sc.state.as_table().unwrap()["count"]
+            .as_integer()
+            .unwrap();
+
+        (oc, ic)
+    };
     assert!(outer_count > 0, "outer counter should have stepped");
-
-    // The lock-step inner compositor should have produced nested state.
-    // Note: the output store holds the raw contribute_state() output from the
-    // lock-step compositor. When used as a Partition, its contribute_state()
-    // calls dump(), which wraps each sub-partition in a StateContribution envelope.
-    let inner_entry = s.get("lockstep-inner").expect("lockstep-inner should have output");
-    let inner_state = inner_entry.state().unwrap().as_table().unwrap();
-
-    // The lock-step compositor's contribute_state returns a dump with partitions + system
-    assert!(
-        inner_state.contains_key("partitions"),
-        "lock-step inner should contribute state with partitions key"
-    );
-    assert!(
-        inner_state.contains_key("system"),
-        "lock-step inner should contribute state with system key"
-    );
-
-    // The inner counter should have been stepped — unwrap the StateContribution envelope
-    let inner_partitions = inner_state["partitions"].as_table().unwrap();
-    let inner_counter_sc = StateContribution::from_toml(&inner_partitions["inner-counter"]).unwrap();
-    let inner_count = inner_counter_sc.state.as_table().unwrap()["count"]
-        .as_integer()
-        .unwrap();
     assert!(
         inner_count > 0,
         "inner counter should have stepped via lock-step compositor"
     );
 
-    drop(s);
     outer.async_shutdown().await.unwrap();
 }
 
@@ -489,7 +492,7 @@ fn state_contribution_importable_from_contract() {
     assert!(table.contains_key("age_ms"));
 
     let roundtripped = StateContribution::from_toml(&toml_val).unwrap();
-    assert_eq!(roundtripped.fresh, true);
+    assert!(roundtripped.fresh);
     assert_eq!(roundtripped.age_ms, 0);
     assert_eq!(
         roundtripped.state.as_table().unwrap()["count"].as_integer().unwrap(),

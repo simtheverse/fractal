@@ -225,6 +225,18 @@ transport modes — the layer 0 bus might use network transport while a layer 1 
 in-process transport. The transport independence guarantee (identical results across
 modes) applies per bus instance.
 
+When network-based transport is in use, message types that cross the bus must support
+serialization and deserialization. The base message trait shall not require serialization
+bounds — this would impose network transport concerns on in-process and async modes,
+violating transport independence. Instead, the network transport implementation shall
+define a serialization-capable message subtrait extending the base message trait with
+serialization bounds, and require codec registration per message type.
+Framework-defined message types (shared context, transition requests, dump and load
+requests) shall implement the serialization subtrait so they function across all
+transport modes without partition-side configuration beyond compositor-level codec
+registration. The serialization requirement is a property of the transport
+configuration, not of the message contract.
+
 **Rationale:** In-process channels minimize latency for single-machine development.
 Asynchronous channels support partitions running on separate threads, in separate
 processes, or on separate cores at independent update rates. Network-based transport
@@ -247,6 +259,12 @@ deployment needs of each compositor's partitions without imposing a system-wide 
 - Fail: A partition contains a compile-time import or branch that is specific to one
   transport mode (i.e., transport choice is not fully abstracted behind the bus
   trait).
+- Pass: Framework message types function under network transport without partition-side
+  configuration beyond compositor-level codec registration.
+- Pass: A partition publishing messages through the base message trait compiles and
+  functions under all transport modes without transport-specific code.
+- Fail: The base message trait requires serialization bounds, imposing network transport
+  concerns on in-process and async modes.
 - Fail: The system fails to initialize or exchange messages under any of the three
   transport modes.
 
@@ -568,15 +586,20 @@ the fault, log it with the faulting sub-partition's identity and layer depth, an
 propagate the error to the outer layer by returning an error from the compositor's own
 trait method call. For the purposes of this requirement, a sub-partition is considered
 to have *timed out* on a given trait method call if that call does not return within a
-per-invocation elapsed-time deadline enforced by the compositor: `step()` and
-`contribute_state()` calls shall each have a maximum duration of 50 ms, and `init()`,
-`load_state()`, and `shutdown()` calls shall each have a maximum duration of 500 ms.
+per-invocation elapsed-time deadline enforced by the compositor. The deadline values are
+domain-configurable: each compositor instance accepts a timeout configuration specifying
+the maximum duration for `step()` and `contribute_state()` calls and for `init()`,
+`load_state()`, and `shutdown()` calls. The default values are 50 ms for
+step/contribute_state and 500 ms for init/load_state/shutdown. Domains shall configure
+values appropriate to their timing constraints (e.g., an industrial process controller
+may use 5 ms for step; a kiosk application may use 100 ms). A compositor shall always
+enforce finite, non-zero deadlines — deadline enforcement shall not be disabled or set to
+an unbounded duration, as this would eliminate the compositor's ability to detect hung
+partitions.
 These deadlines apply to the trait method call returning, not to the guarantee that all
 work initiated by the sub-partition has ceased. Under supervisory coordination, a
 sub-partition's `shutdown()` may return promptly after signaling its internal tasks to
 stop, while those tasks complete asynchronously (see FPA-009).
-Implementations may enforce stricter (shorter) per-invocation deadlines than these
-maxima but shall not use longer deadlines.
 These deadlines are per call (not per tick) and are measured using a
 monotonic clock. Deadline enforcement is defined in terms of the compositor's observable
 behavior: when a per-invocation deadline expires, the compositor shall stop waiting for
@@ -663,6 +686,11 @@ the outer layer already provides an error propagation path.
   without either propagating the error or activating a configured fallback.
 - Fail: A sub-partition fault propagates as a raw panic or unhandled exception without
   compositor context wrapping.
+- Pass: A compositor constructed with domain-specific timeout values enforces those
+  values rather than the defaults.
+- Pass: A compositor always enforces some finite, non-zero deadline — it is not possible
+  to disable deadline enforcement.
+- Fail: A compositor operates with infinite or disabled deadline enforcement.
 - Fail: A dedicated fault bus or fault message channel exists alongside the regular bus.
 
 ---
@@ -716,7 +744,15 @@ signals are scoped to the contract crate that declares them: signals declared in
 a system's contract crate reach that system's orchestrator; they do not propagate beyond
 the system's boundary when the system is embedded as a partition in an outer system. An
 outer system that embeds the inner system may declare its own direct signals in its own
-contract crate, independent of the inner system's signals. Any partition within the
+contract crate, independent of the inner system's signals. At runtime, the contract
+crate boundary is enforced by the compositor boundary. Each compositor maintains a signal
+registry defining which direct signal types are recognized at its layer. When collecting
+signals from inner compositors, the outer compositor filters against its own registry —
+only signals whose type identifier is registered at the outer layer propagate.
+Unregistered signals are silently dropped at the boundary, analogous to the compositor's
+relay authority for bus messages (FPA-010). This makes boundary scoping explicit and
+declarative: an outer compositor opts in to each signal type it receives from inner
+layers. Any partition within the
 declaring contract crate's hierarchy may emit a declared direct signal. Direct signals
 shall carry minimal payload: a signal type identifier, a reason string, and the identity
 of the emitting partition. Every direct signal emission shall be logged with the emitting
@@ -761,6 +797,11 @@ any other partition would.
   system's boundary when the system is embedded as a partition in an outer system.
 - Fail: Direct signals are used for non-safety-critical communication that could be
   handled through the normal compositor relay chain.
+- Pass: A signal type emitted within an inner compositor's hierarchy but not registered
+  at the outer compositor's layer is dropped at the compositor boundary and does not
+  reach the outer orchestrator.
+- Pass: The outer compositor's signal registry is the sole mechanism determining which
+  inner signals cross the boundary.
 - Fail: The set of direct signal types is large or changes frequently, indicating misuse
   as a general communication mechanism.
 
@@ -893,6 +934,43 @@ are composition fragments.
 - Fail: The system accepts an unrecognized fragment name without reporting an error.
 - Fail: The named fragment mechanism is available only at specific scopes; other scopes
   require a different mechanism to achieve named sub-component selections.
+
+---
+
+### FPA-015 — Standard Composition Entry Point
+
+**Statement:** The system shall provide a standard composition function that serves
+as the primary entry point for operators, embedders, and system tests. The function
+accepts three inputs: (a) a composition fragment (FPA-019) specifying the system
+configuration, (b) a partition registry mapping implementation names to partition
+constructors, and (c) a bus instance for the layer's transport (FPA-004). The function
+creates partitions from the composition fragment via registry lookup, wires events
+declared in the configuration (FPA-028), and returns a compositor ready for lifecycle
+execution. Partition creation shall always go through the registry — the composition
+function shall not accept pre-constructed partition instances. The composition function
+operates at any layer: an inner compositor is composed from its own fragment, registry,
+and bus, consistent with the fractal partition pattern (FPA-001).
+
+**Rationale:** The composition fragment (FPA-019) defines what a system looks like;
+the composition function defines how that description becomes a running system. Without
+a standard entry point, each application invents its own composition pattern, breaking
+uniformity and making FPA-034 (system tests use operator entry points) unverifiable
+against a concrete API. Registry-based partition creation enforces runtime
+configurability (FPA-002) — implementations are selected by name in configuration,
+not hardcoded in application code. The three-input signature (fragment, registry, bus)
+separates the three concerns that vary independently: system structure, available
+implementations, and transport mode.
+
+**Verification Expectations:**
+- Pass: System tests, interactive applications, and embedders all invoke the same
+  composition function, differing only in the composition fragment and bus provided.
+- Pass: Changing which partition implementation is used for a given role requires only
+  a change to the composition fragment's implementation name, not to application code.
+- Pass: The composition function operates identically at layer 0 and at inner layers.
+- Fail: A system test or application constructs a compositor by directly instantiating
+  partitions, bypassing the composition function and registry.
+- Fail: The composition function accepts pre-constructed partition instances, bypassing
+  registry lookup.
 
 ---
 
@@ -1320,6 +1398,7 @@ specifications do.
 | FPA-011 | Compositor Fault Handling                                      |
 | FPA-012 | Recursive State Contribution                                   |
 | FPA-013 | Direct Signals                                                 |
+| FPA-015 | Standard Composition Entry Point                               |
 | FPA-019 | Composition Fragments                                          |
 | FPA-020 | Composition Fragment Inheritance                               |
 | FPA-021 | Named Composition Fragments                                    |

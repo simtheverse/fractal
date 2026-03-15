@@ -4,3 +4,4 @@
 pub mod reference;
 pub mod registry;
 pub mod system;
+pub mod test_partitions;

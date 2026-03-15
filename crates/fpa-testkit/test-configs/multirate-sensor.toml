@@ -1,0 +1,22 @@
+# Multi-rate bus communication: Sensor + Follower + Counter
+# Rate configuration is applied programmatically via set_rate_config();
+# this fragment defines the partition topology. When fast_sensor is set
+# to rate 4, follower at rate 1 sees only the last reading per outer
+# tick (LatestValue semantic).
+#
+# DeferredBus ensures stepping order does not affect results (FPA-014).
+
+[system]
+timestep = 1.0
+
+[partitions.fast_sensor]
+implementation = "Sensor"
+scale = 1.0
+offset = 0.0
+
+[partitions.follower]
+implementation = "Follower"
+threshold = 3.0
+
+[partitions.counter]
+implementation = "Counter"

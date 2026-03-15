@@ -11,7 +11,7 @@ pub struct CompositionFragment {
 
     /// System-level parameters (timestep, transport mode, etc.)
     #[serde(default)]
-    pub system: HashMap<String, toml::Value>,
+    pub system: BTreeMap<String, toml::Value>,
 
     /// Partition selections — maps partition name to its config.
     /// Uses BTreeMap for deterministic iteration order: partition

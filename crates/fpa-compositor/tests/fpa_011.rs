@@ -5,6 +5,7 @@ use std::sync::Arc;
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::state_machine::ExecutionState;
+use fpa_compositor::multi_rate::RateConfig;
 use fpa_contract::{Partition, PartitionError, StateContribution};
 
 // --- Test partition implementations ---
@@ -627,4 +628,81 @@ fn error_during_init_includes_operation_context() {
         "error should contain original message: {}",
         err.message
     );
+}
+
+// --- Fallback failure during multi-rate remaining sub-steps ---
+
+/// A fallback partition that fails on its second step.
+struct FailOnSecondStep {
+    id: String,
+    count: u64,
+    initialized: bool,
+}
+
+impl FailOnSecondStep {
+    fn new(id: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            count: 0,
+            initialized: false,
+        }
+    }
+}
+
+impl Partition for FailOnSecondStep {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn init(&mut self) -> Result<(), PartitionError> {
+        self.initialized = true;
+        Ok(())
+    }
+
+    fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
+        self.count += 1;
+        if self.count >= 2 {
+            return Err(PartitionError::new(&self.id, "step", "fallback failed on second step"));
+        }
+        Ok(())
+    }
+
+    fn shutdown(&mut self) -> Result<(), PartitionError> {
+        Ok(())
+    }
+
+    fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
+        Ok(toml::Value::Table(toml::map::Map::new()))
+    }
+
+    fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
+        Ok(())
+    }
+}
+
+/// Multi-rate partition (rate=3) fails on step. Fallback succeeds for the
+/// failed sub-step but fails on the next remaining sub-step. Compositor
+/// transitions to Error.
+#[test]
+fn fallback_failure_during_remaining_substeps() {
+    // FailingPartition fails on every step
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(FailingPartition::new("fragile", "step")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    let mut rate_config = RateConfig::new();
+    rate_config.set_rate("fragile", 3);
+    compositor.set_rate_config(rate_config);
+
+    // Fallback that fails on its 2nd step — will succeed for the failed
+    // sub-step but fail on the next remaining sub-step
+    compositor.register_fallback("fragile", Box::new(FailOnSecondStep::new("fragile"))).unwrap();
+
+    compositor.init().unwrap();
+    let result = compositor.run_tick(1.0);
+
+    assert!(result.is_err(), "fallback failure on remaining sub-step should error");
+    assert_eq!(compositor.state(), ExecutionState::Error);
 }

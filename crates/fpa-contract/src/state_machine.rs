@@ -84,6 +84,7 @@ impl std::error::Error for TransitionError {}
 /// - ShuttingDown -> Terminated
 /// - ShuttingDown -> Error
 /// - Error -> ShuttingDown
+///
 /// Uses `Cell` for interior mutability so that `force_state` and
 /// `request_transition` can be called from `&self` contexts (e.g.,
 /// `Partition::contribute_state`). This is safe because `ExecutionState`

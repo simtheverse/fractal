@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fpa_bus::{Bus, BusExt, BusReader, InProcessBus, TypedReader};
+use fpa_bus::{Bus, BusExt, BusReader, DeferredBus, InProcessBus, TypedReader};
 use fpa_contract::{DumpRequest, LoadRequest, Partition, PartitionError, StateContribution};
 use fpa_events::EventEngine;
 
@@ -48,12 +48,13 @@ pub enum LifecycleOp {
 /// - Phase 2: step partitions with direct signal checks between each;
 ///   shared context assembled after tick barrier
 /// - Phase 3: event evaluation, request processing, final signal check
+///
 /// Fault handling wraps every partition call.
 pub struct Compositor {
     /// Unique identifier for this compositor instance.
     id: String,
     partitions: Vec<Box<dyn Partition>>,
-    bus: Arc<dyn Bus>,
+    bus: Arc<DeferredBus>,
     state_machine: StateMachine,
     double_buffer: DoubleBuffer,
     /// Fallback partitions keyed by the ID of the partition they replace.
@@ -98,11 +99,24 @@ pub struct Compositor {
 impl Compositor {
     /// Create a new compositor with the given partitions and bus.
     ///
-    /// Accepts any `Bus` implementation via `Arc<dyn Bus>`, enabling runtime
-    /// transport selection (FPA-004) and shared ownership so partitions can
-    /// hold bus references at construction time.
-    /// For convenience with `InProcessBus`, use `Compositor::new_default`.
+    /// Wraps the bus in a `DeferredBus` internally. Partitions that were
+    /// constructed with the original `bus` will publish directly to it,
+    /// bypassing deferred mode — this is fine for partitions that don't
+    /// publish bus messages during `step()` (Counter, Accumulator, Doubler).
+    ///
+    /// For partitions that publish during `step()`, use `compose()` or
+    /// `from_deferred_bus()` so partitions hold the `DeferredBus` and
+    /// FPA-014 intra-tick isolation is enforced.
     pub fn new(partitions: Vec<Box<dyn Partition>>, bus: Arc<dyn Bus>) -> Self {
+        Self::from_deferred_bus(partitions, Arc::new(DeferredBus::new(bus)))
+    }
+
+    /// Create a new compositor with a pre-constructed `DeferredBus`.
+    ///
+    /// Use this when partitions need to hold the same `DeferredBus` instance
+    /// (e.g., when created via `compose()` or in tests where partitions
+    /// publish bus messages during `step()`).
+    pub fn from_deferred_bus(partitions: Vec<Box<dyn Partition>>, bus: Arc<DeferredBus>) -> Self {
         let transition_reader = bus.subscribe::<TransitionRequest>();
         let dump_reader = bus.subscribe::<DumpRequest>();
         let load_reader = bus.subscribe::<LoadRequest>();
@@ -215,10 +229,9 @@ impl Compositor {
         emitter_identity: impl Into<String>,
     ) -> Result<(), PartitionError> {
         let signal_id = signal_id.into();
-        let id_clone = self.id.clone();
         if !self.direct_signal_registry.is_registered(&signal_id) {
             return Err(self.make_error(
-                &id_clone,
+                &self.id,
                 "emit_direct_signal",
                 format!("signal '{}' is not registered", signal_id),
             ));
@@ -263,7 +276,7 @@ impl Compositor {
         let requests = std::mem::take(&mut self.pending_requests);
         match &self.relay_policy {
             RelayPolicy::Forward => requests,
-            RelayPolicy::Transform(f) => requests.into_iter().map(|r| f(r)).collect(),
+            RelayPolicy::Transform(f) => requests.into_iter().map(f).collect(),
             RelayPolicy::Suppress => Vec::new(),
             RelayPolicy::Aggregate => {
                 if requests.is_empty() {
@@ -333,8 +346,8 @@ impl Compositor {
         &*self.bus
     }
 
-    /// Get a shared reference to the bus (for partition injection).
-    pub fn bus_arc(&self) -> &Arc<dyn Bus> {
+    /// Get a shared reference to the deferred bus.
+    pub fn bus_arc(&self) -> &Arc<DeferredBus> {
         &self.bus
     }
 
@@ -448,68 +461,23 @@ impl Compositor {
         self.double_buffer.swap();
 
         // === Phase 2: Partition stepping (FPA-014) ===
-        // For multi-rate partitions, each partition steps `rate` times per outer
-        // tick with `dt / rate` per sub-step. If a partition faults mid-cycle and
-        // a fallback is registered, the fallback completes the remaining sub-steps.
-        let mut i = 0;
-        while i < self.partitions.len() {
-            let partition_id = self.partitions[i].id().to_string();
-            let rate = self.rate_config.get_rate(&partition_id);
-            let sub_dt = dt / rate as f64;
-
-            for sub in 0..rate {
-                let step_result = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
-
-                if let Err(step_err) = step_result.into_result() {
-                    // Check for fallback
-                    if let Some(mut fallback) = self.fallbacks.remove(&partition_id) {
-                        // Step the fallback for the failed sub-step
-                        let fallback_result = fault::safe_step(fallback.as_mut(), sub_dt, &self.timeout_config);
-                        if let Err(fallback_err) = fallback_result.into_result() {
-                            self.state_machine.force_state(ExecutionState::Error);
-                            return Err(fallback_err.with_layer_depth(self.layer_depth));
-                        }
-
-                        // Replace the partition with the fallback
-                        self.partitions[i] = fallback;
-
-                        // Complete remaining sub-steps with the fallback
-                        for _remaining in (sub + 1)..rate {
-                            let r = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
-                            if let Err(e) = r.into_result() {
-                                self.state_machine.force_state(ExecutionState::Error);
-                                return Err(e.with_layer_depth(self.layer_depth));
-                            }
-                        }
-                        break;
-                    }
-
-                    // No fallback - transition to Error and propagate
-                    self.state_machine.force_state(ExecutionState::Error);
-                    return Err(step_err.with_layer_depth(self.layer_depth));
-                }
-            }
-
-            // Collect output after all sub-steps (including fallback's remaining steps)
-            let state = fault::safe_contribute_state(self.partitions[i].as_ref(), &self.timeout_config)
-                .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-            let envelope = StateContribution {
-                state,
-                fresh: true,
-                age_ms: 0,
-            };
-            self.double_buffer.write(&partition_id, envelope.to_toml());
-
-            // Step 3: Check for pending direct signals between partition steps.
-            self.collect_inner_signals();
-
-            i += 1;
-        }
+        // Enable deferred mode so bus messages published during step() are
+        // queued rather than immediately delivered. This ensures no partition
+        // sees another partition's current-tick bus messages — the same
+        // isolation guarantee the double buffer provides for SharedContext.
+        //
+        // Deferred mode is always restored on exit from Phase 2 — including
+        // fault paths — so the bus is never left in deferred state.
+        self.bus.begin_deferred();
+        let phase2_result = self.run_phase2_stepping(dt);
+        self.bus.end_deferred();
+        phase2_result?;
 
         // Assemble shared context from current tick's partition outputs
         // and publish on the bus (FPA-014: after the tick barrier, before
         // Phase 3). SharedContext reflects the complete, consistent state
-        // of all partitions after stepping.
+        // of all partitions after stepping. Published with deferred mode
+        // off, so it goes directly to the inner bus.
         {
             let mut table = toml::map::Map::new();
             for (id, value) in self.double_buffer.write_all() {
@@ -540,11 +508,18 @@ impl Compositor {
         }
 
         // Step 2: Process bus-mediated transition requests (FPA-006).
+        // Also feed each request into the relay system so that inner compositor
+        // requests are available to the outer layer via drain_relayed_requests()
+        // per FPA-010 Phase 3 step 4: "Relay qualified requests to the outer bus."
         for request in self.transition_reader.read_all() {
+            self.submit_inner_request(request.clone());
             self.process_transition_request(request)?;
         }
 
-        // Step 3: Check for pending direct signals.
+        // Step 3: Collect relayed requests from inner compositor partitions.
+        self.collect_inner_relayed_requests()?;
+
+        // Step 4: Check for pending direct signals.
         self.collect_inner_signals();
 
         Ok(())
@@ -753,7 +728,7 @@ impl Compositor {
                     // next swap makes the loaded snapshot visible as the
                     // pre-step read buffer for event evaluation and signals.
                     self.double_buffer
-                        .write(&partition.id().to_string(), envelope_value.clone());
+                        .write(partition.id(), envelope_value.clone());
                 }
             }
         }
@@ -770,21 +745,119 @@ impl Compositor {
         Ok(())
     }
 
+    /// Phase 2 stepping loop, extracted so `run_tick` can guarantee deferred
+    /// mode cleanup regardless of fault paths (FPA-014, FPA-011).
+    fn run_phase2_stepping(&mut self, dt: f64) -> Result<(), PartitionError> {
+        // For multi-rate partitions, each partition steps `rate` times per outer
+        // tick with `dt / rate` per sub-step. If a partition faults mid-cycle and
+        // a fallback is registered, the fallback completes the remaining sub-steps.
+        let mut i = 0;
+        while i < self.partitions.len() {
+            let partition_id = self.partitions[i].id().to_string();
+            let rate = self.rate_config.get_rate(&partition_id);
+            let sub_dt = dt / rate as f64;
+
+            for sub in 0..rate {
+                let step_result = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
+
+                if let Err(step_err) = step_result.into_result() {
+                    // Check for fallback
+                    if let Some(mut fallback) = self.fallbacks.remove(&partition_id) {
+                        // Step the fallback for the failed sub-step
+                        let fallback_result = fault::safe_step(fallback.as_mut(), sub_dt, &self.timeout_config);
+                        if let Err(fallback_err) = fallback_result.into_result() {
+                            self.state_machine.force_state(ExecutionState::Error);
+                            return Err(fallback_err.with_layer_depth(self.layer_depth));
+                        }
+
+                        // Replace the partition with the fallback
+                        self.partitions[i] = fallback;
+
+                        // Complete remaining sub-steps with the fallback
+                        for _remaining in (sub + 1)..rate {
+                            let r = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
+                            if let Err(e) = r.into_result() {
+                                self.state_machine.force_state(ExecutionState::Error);
+                                return Err(e.with_layer_depth(self.layer_depth));
+                            }
+                        }
+                        break;
+                    }
+
+                    // No fallback - transition to Error and propagate
+                    self.state_machine.force_state(ExecutionState::Error);
+                    return Err(step_err.with_layer_depth(self.layer_depth));
+                }
+            }
+
+            // Collect output after all sub-steps (including fallback's remaining steps)
+            let state = fault::safe_contribute_state(self.partitions[i].as_ref(), &self.timeout_config)
+                .map_err(|e| e.with_layer_depth(self.layer_depth))?;
+            let envelope = StateContribution {
+                state,
+                fresh: true,
+                age_ms: 0,
+            };
+            self.double_buffer.write(&partition_id, envelope.to_toml());
+
+            // Check for pending direct signals between partition steps.
+            self.collect_inner_signals();
+
+            i += 1;
+        }
+        Ok(())
+    }
+
+    /// Collect relayed transition requests from inner compositor partitions (FPA-010).
+    ///
+    /// After stepping, any partition that is itself a `Compositor` may have
+    /// pending relayed requests. This method drains those requests (applying the
+    /// inner compositor's relay policy) and processes them on the outer compositor.
+    fn collect_inner_relayed_requests(&mut self) -> Result<(), PartitionError> {
+        // Collect relayed requests from all inner compositors first to avoid
+        // borrow conflicts with self.process_transition_request().
+        let mut all_relayed = Vec::new();
+        for partition in &mut self.partitions {
+            if let Some(any) = partition.as_any_mut() {
+                if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
+                    all_relayed.extend(inner_comp.drain_relayed_requests());
+                }
+            }
+        }
+        for request in all_relayed {
+            // Feed into this compositor's relay so the request can continue
+            // propagating up to the next outer layer.
+            self.submit_inner_request(request.clone());
+            self.process_transition_request(request)?;
+        }
+        Ok(())
+    }
+
     /// Collect direct signals from inner compositor partitions (FPA-013).
     ///
     /// After stepping, any partition that is itself a `Compositor` may have
     /// emitted direct signals. This method drains those signals and extends
     /// the current compositor's `emitted_signals`, enabling signal propagation
     /// through nested layers.
+    ///
+    /// Signals are filtered against the outer compositor's `DirectSignalRegistry`:
+    /// only signals whose `signal_id` is registered at the outer layer propagate.
+    /// This enforces the FPA-013 boundary scoping requirement — signals do not
+    /// propagate beyond the declaring contract crate's boundary unless the outer
+    /// compositor explicitly registers them.
     fn collect_inner_signals(&mut self) {
         for partition in &mut self.partitions {
             if let Some(any) = partition.as_any_mut() {
                 if let Some(inner_comp) = any.downcast_mut::<Compositor>() {
                     let signals = std::mem::take(&mut inner_comp.emitted_signals);
-                    self.emitted_signals.extend(signals);
+                    self.emitted_signals.extend(
+                        signals.into_iter().filter(|s| self.direct_signal_registry.is_registered(&s.signal_id)),
+                    );
                 } else if let Some(inner_sup) = any.downcast_mut::<crate::supervisory::SupervisoryCompositor>() {
                     let signals = inner_sup.drain_emitted_signals();
-                    self.emitted_signals.extend(signals);
+                    self.emitted_signals.extend(
+                        signals.into_iter().filter(|s| self.direct_signal_registry.is_registered(&s.signal_id)),
+                    );
                 }
             }
         }

@@ -29,13 +29,13 @@ impl Predicate {
     pub fn evaluate(&self, signals: &HashMap<String, f64>) -> bool {
         match self {
             Predicate::LessThan { signal, threshold } => {
-                signals.get(signal).map_or(false, |v| *v < *threshold)
+                signals.get(signal).is_some_and(|v| *v < *threshold)
             }
             Predicate::GreaterThan { signal, threshold } => {
-                signals.get(signal).map_or(false, |v| *v > *threshold)
+                signals.get(signal).is_some_and(|v| *v > *threshold)
             }
             Predicate::Equal { signal, threshold } => {
-                signals.get(signal).map_or(false, |v| *v == *threshold)
+                signals.get(signal).is_some_and(|v| *v == *threshold)
             }
             Predicate::And(a, b) => a.evaluate(signals) && b.evaluate(signals),
         }

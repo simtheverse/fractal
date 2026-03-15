@@ -13,6 +13,7 @@ Traces to: FPA-SRS-000, FPA-CON-000
 | FPA-012 | Recursive state contribution | Implemented |
 | FPA-013 | Direct signals bypass relay chain | Implemented |
 | FPA-014 | Double-buffered tick lifecycle | Pending |
+| FPA-015 | Standard composition entry point | Implemented |
 | FPA-022 | State snapshot as composition fragment | Pending |
 | FPA-023 | Dump/load round-trip identity | Pending |
 | FPA-024 | Event system integrated into compositor | Pending |
@@ -46,6 +47,21 @@ regardless of whether a partition is a leaf or a nested compositor.
 
 `load_state()` delegates to `load()`, decomposing the TOML fragment and dispatching
 sub-partition states to the appropriate inner partitions.
+
+## FPA-015: Standard Composition Entry Point
+
+The `compose()` function serves as the standard entry point for operators, embedders,
+and system tests. It accepts three inputs:
+
+- A `CompositionFragment` specifying the system configuration
+- A `PartitionRegistry` mapping implementation names to partition constructors
+- A `Bus` instance for the layer's transport
+
+The function creates partitions from the composition fragment via registry lookup, wires
+events declared in the configuration, and returns a compositor ready for lifecycle
+execution. Partition creation always goes through the registry — `compose()` does not
+accept pre-constructed partition instances. The function operates at any layer, consistent
+with the fractal partition pattern.
 
 ## FPA-013: Direct Signals
 
