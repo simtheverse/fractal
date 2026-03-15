@@ -156,7 +156,7 @@ pub struct PartitionHandle {
 pub struct SupervisoryCompositor {
     id: String,
     partition_handles: Vec<PartitionHandle>,
-    bus: Box<dyn Bus>,
+    bus: Arc<dyn Bus>,
     state_machine: StateMachine,
     output_store: Arc<Mutex<HashMap<String, FreshnessEntry>>>,
     heartbeat_timeout: Duration,
@@ -180,13 +180,14 @@ impl SupervisoryCompositor {
     /// `heartbeat_timeout` controls how long a partition can go without
     /// updating before being considered stale/faulted.
     ///
-    /// Accepts any `Bus` implementation via `Box<dyn Bus>`, enabling runtime
-    /// transport selection (FPA-004). For convenience with `InProcessBus`,
+    /// Accepts any `Bus` implementation via `Arc<dyn Bus>`, enabling runtime
+    /// transport selection (FPA-004) and shared ownership.
+    /// For convenience with `InProcessBus`,
     /// use `SupervisoryCompositor::new_default`.
     pub fn new(
         id: impl Into<String>,
         partitions: Vec<Box<dyn Partition>>,
-        bus: Box<dyn Bus>,
+        bus: Arc<dyn Bus>,
         heartbeat_timeout: Duration,
     ) -> Self {
         Self {
@@ -215,7 +216,7 @@ impl SupervisoryCompositor {
         bus_id: impl Into<String>,
         heartbeat_timeout: Duration,
     ) -> Self {
-        Self::new(id, partitions, Box::new(InProcessBus::new(bus_id)), heartbeat_timeout)
+        Self::new(id, partitions, Arc::new(InProcessBus::new(bus_id)), heartbeat_timeout)
     }
 
     /// Set the layer depth for this compositor.

@@ -4,6 +4,8 @@
 //! contribution is properly nested, and that tick propagation works
 //! at all layers.
 
+use std::sync::Arc;
+
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::Counter;
@@ -24,7 +26,7 @@ fn three_layer_nesting_state_and_ticks() {
         Box::new(Counter::new("B2a")),
     ];
     let b2_bus = InProcessBus::new("layer-2-bus");
-    let b2 = Compositor::new(b2_partitions, Box::new(b2_bus))
+    let b2 = Compositor::new(b2_partitions, Arc::new(b2_bus))
         .with_id("B2")
         .with_layer_depth(2);
 
@@ -34,7 +36,7 @@ fn three_layer_nesting_state_and_ticks() {
         Box::new(b2),
     ];
     let b_bus = InProcessBus::new("layer-1-bus");
-    let b = Compositor::new(b_partitions, Box::new(b_bus))
+    let b = Compositor::new(b_partitions, Arc::new(b_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -44,7 +46,7 @@ fn three_layer_nesting_state_and_ticks() {
         Box::new(b),
     ];
     let outer_bus = InProcessBus::new("layer-0-bus");
-    let mut orchestrator = Compositor::new(outer_partitions, Box::new(outer_bus))
+    let mut orchestrator = Compositor::new(outer_partitions, Arc::new(outer_bus))
         .with_id("orchestrator");
 
     orchestrator.init().unwrap();

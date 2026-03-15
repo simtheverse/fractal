@@ -1,5 +1,7 @@
 //! Tests for FPA-011: Fault Handling.
 
+use std::sync::Arc;
+
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::state_machine::ExecutionState;
@@ -242,7 +244,7 @@ fn step_error_is_caught_with_context() {
         Box::new(FailingPartition::new("failer", "step")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -265,7 +267,7 @@ fn panic_during_step_is_caught() {
         Box::new(PanickingPartition::new("panicker")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -288,7 +290,7 @@ fn error_includes_partition_id_and_operation() {
         Box::new(FailingPartition::new("my-partition-42", "step")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let err = compositor.run_tick(1.0).unwrap_err();
@@ -304,10 +306,10 @@ fn fallback_activated_on_fault() {
         Box::new(FailingPartition::new("primary", "step")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     // Register a fallback for "primary"
-    compositor.register_fallback("primary", Box::new(FallbackPartition::new("primary")));
+    compositor.register_fallback("primary", Box::new(FallbackPartition::new("primary"))).unwrap();
 
     compositor.init().unwrap();
 
@@ -336,9 +338,9 @@ fn fallback_with_panic_partition() {
         Box::new(PanickingPartition::new("panicker")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
-    compositor.register_fallback("panicker", Box::new(FallbackPartition::new("panicker")));
+    compositor.register_fallback("panicker", Box::new(FallbackPartition::new("panicker"))).unwrap();
 
     compositor.init().unwrap();
 
@@ -357,7 +359,7 @@ fn slow_partition_detected_as_timeout() {
         Box::new(SlowPartition::new("slowpoke", 100)),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -380,9 +382,9 @@ fn slow_partition_with_fallback() {
         Box::new(SlowPartition::new("slowpoke", 100)),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
-    compositor.register_fallback("slowpoke", Box::new(FallbackPartition::new("slowpoke")));
+    compositor.register_fallback("slowpoke", Box::new(FallbackPartition::new("slowpoke"))).unwrap();
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -397,7 +399,7 @@ fn mixed_healthy_and_failing_partitions() {
         Box::new(FailingPartition::new("failer", "step")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.run_tick(1.0);
@@ -414,7 +416,7 @@ fn init_failure_transitions_to_error() {
         Box::new(FailingPartition::new("failer", "init")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let result = compositor.init();
     assert!(result.is_err());
@@ -430,7 +432,7 @@ fn panic_during_init_is_caught() {
         Box::new(PanickingPartition::on("panicker", "init")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let result = compositor.init();
     assert!(result.is_err());
@@ -451,7 +453,7 @@ fn panic_during_shutdown_is_caught() {
         Box::new(PanickingPartition::on("panicker", "shutdown")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.shutdown();
@@ -472,7 +474,7 @@ fn panic_during_contribute_state_is_caught() {
         Box::new(PanickingPartition::on("panicker", "contribute_state")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.dump();
@@ -493,7 +495,7 @@ fn panic_during_load_state_is_caught() {
         Box::new(PanickingPartition::on("panicker", "load_state")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     compositor.pause().unwrap();
@@ -530,7 +532,7 @@ fn slow_init_detected_as_timeout() {
         Box::new(SlowPartition::on("slowpoke", 600, "init")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let result = compositor.init();
     assert!(result.is_err(), "slow init should be detected as timeout fault");
@@ -551,7 +553,7 @@ fn slow_shutdown_detected_as_timeout() {
         Box::new(SlowPartition::on("slowpoke", 600, "shutdown")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.shutdown();
@@ -572,7 +574,7 @@ fn slow_contribute_state_detected_as_timeout() {
         Box::new(SlowPartition::on("slowpoke", 100, "contribute_state")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     let result = compositor.dump();
@@ -588,18 +590,24 @@ fn slow_contribute_state_detected_as_timeout() {
 
 // --- New test: fallback identity mismatch rejected (FPA-011 audit gap) ---
 
-/// Registering a fallback with mismatched id panics.
+/// Registering a fallback with mismatched id returns an error.
 #[test]
-#[should_panic(expected = "fallback id")]
 fn fallback_identity_mismatch_rejected() {
     let partitions: Vec<Box<dyn Partition>> = vec![
         Box::new(FallbackPartition::new("primary")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     // Fallback has id "wrong-id" but is registered for "primary"
-    compositor.register_fallback("primary", Box::new(FallbackPartition::new("wrong-id")));
+    let result = compositor.register_fallback("primary", Box::new(FallbackPartition::new("wrong-id")));
+    assert!(result.is_err(), "registering fallback with mismatched id should return error");
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("fallback id"),
+        "error message should mention fallback id mismatch: {}",
+        err.message
+    );
 }
 
 /// Init error includes correct operation context (not "step").
@@ -609,7 +617,7 @@ fn error_during_init_includes_operation_context() {
         Box::new(FailingPartition::new("failer", "init")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     let err = compositor.init().unwrap_err();
     assert_eq!(err.partition_id, "failer");

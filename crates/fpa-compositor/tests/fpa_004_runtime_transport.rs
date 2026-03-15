@@ -4,6 +4,8 @@
 //! when constructed with different bus implementations (InProcessBus, AsyncBus,
 //! NetworkBus). This proves runtime transport selection via dependency injection.
 
+use std::sync::Arc;
+
 use fpa_bus::{AsyncBus, Bus, BusExt, BusReader, InProcessBus, NetworkBus, Transport};
 use fpa_compositor::compositor::{Compositor, SharedContext};
 use fpa_compositor::state_machine::ExecutionState;
@@ -11,7 +13,7 @@ use fpa_contract::test_support::Counter;
 use fpa_contract::StateContribution;
 
 /// Helper: build a compositor with the given bus, run N ticks, return the dump.
-fn run_compositor_with_bus(bus: Box<dyn Bus>, n: u64) -> toml::Value {
+fn run_compositor_with_bus(bus: Arc<dyn Bus>, n: u64) -> toml::Value {
     let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
         Box::new(Counter::new("alpha")),
         Box::new(Counter::new("beta")),
@@ -31,11 +33,11 @@ fn run_compositor_with_bus(bus: Box<dyn Bus>, n: u64) -> toml::Value {
 #[test]
 fn same_result_inprocess_and_async() {
     let state_inprocess = run_compositor_with_bus(
-        Box::new(InProcessBus::new("test-inprocess")),
+        Arc::new(InProcessBus::new("test-inprocess")),
         5,
     );
     let state_async = run_compositor_with_bus(
-        Box::new(AsyncBus::new("test-async")),
+        Arc::new(AsyncBus::new("test-async")),
         5,
     );
     assert_eq!(state_inprocess, state_async);
@@ -45,11 +47,11 @@ fn same_result_inprocess_and_async() {
 #[test]
 fn same_result_inprocess_and_network() {
     let state_inprocess = run_compositor_with_bus(
-        Box::new(InProcessBus::new("test-inprocess")),
+        Arc::new(InProcessBus::new("test-inprocess")),
         5,
     );
     let state_network = run_compositor_with_bus(
-        Box::new(NetworkBus::new("test-network")),
+        Arc::new(NetworkBus::new("test-network")),
         5,
     );
     assert_eq!(state_inprocess, state_network);
@@ -59,15 +61,15 @@ fn same_result_inprocess_and_network() {
 #[test]
 fn same_result_all_three_transports() {
     let state_inprocess = run_compositor_with_bus(
-        Box::new(InProcessBus::new("test-inprocess")),
+        Arc::new(InProcessBus::new("test-inprocess")),
         10,
     );
     let state_async = run_compositor_with_bus(
-        Box::new(AsyncBus::new("test-async")),
+        Arc::new(AsyncBus::new("test-async")),
         10,
     );
     let state_network = run_compositor_with_bus(
-        Box::new(NetworkBus::new("test-network")),
+        Arc::new(NetworkBus::new("test-network")),
         10,
     );
     assert_eq!(state_inprocess, state_async);
@@ -81,19 +83,19 @@ fn compositor_bus_reports_correct_transport() {
         Box::new(Counter::new("a")),
     ];
 
-    let compositor = Compositor::new(partitions, Box::new(InProcessBus::new("ip")));
+    let compositor = Compositor::new(partitions, Arc::new(InProcessBus::new("ip")));
     assert_eq!(compositor.bus().transport(), Transport::InProcess);
 
     let partitions2: Vec<Box<dyn fpa_contract::Partition>> = vec![
         Box::new(Counter::new("a")),
     ];
-    let compositor2 = Compositor::new(partitions2, Box::new(AsyncBus::new("ab")));
+    let compositor2 = Compositor::new(partitions2, Arc::new(AsyncBus::new("ab")));
     assert_eq!(compositor2.bus().transport(), Transport::Async);
 
     let partitions3: Vec<Box<dyn fpa_contract::Partition>> = vec![
         Box::new(Counter::new("a")),
     ];
-    let compositor3 = Compositor::new(partitions3, Box::new(NetworkBus::new("nb")));
+    let compositor3 = Compositor::new(partitions3, Arc::new(NetworkBus::new("nb")));
     assert_eq!(compositor3.bus().transport(), Transport::Network);
 }
 
@@ -101,9 +103,9 @@ fn compositor_bus_reports_correct_transport() {
 #[test]
 fn shared_context_published_on_all_transports() {
     for (label, bus) in [
-        ("inprocess", Box::new(InProcessBus::new("ip")) as Box<dyn Bus>),
-        ("async", Box::new(AsyncBus::new("ab")) as Box<dyn Bus>),
-        ("network", Box::new(NetworkBus::new("nb")) as Box<dyn Bus>),
+        ("inprocess", Arc::new(InProcessBus::new("ip")) as Arc<dyn Bus>),
+        ("async", Arc::new(AsyncBus::new("ab")) as Arc<dyn Bus>),
+        ("network", Arc::new(NetworkBus::new("nb")) as Arc<dyn Bus>),
     ] {
         let mut reader = bus.subscribe::<SharedContext>();
 
@@ -152,7 +154,7 @@ fn nested_compositors_with_different_transports() {
     let inner_partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
         Box::new(Counter::new("B1")),
     ];
-    let inner = Compositor::new(inner_partitions, Box::new(AsyncBus::new("inner-async")))
+    let inner = Compositor::new(inner_partitions, Arc::new(AsyncBus::new("inner-async")))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -161,7 +163,7 @@ fn nested_compositors_with_different_transports() {
         Box::new(Counter::new("A")),
         Box::new(inner),
     ];
-    let mut outer = Compositor::new(outer_partitions, Box::new(NetworkBus::new("outer-network")))
+    let mut outer = Compositor::new(outer_partitions, Arc::new(NetworkBus::new("outer-network")))
         .with_id("orchestrator");
 
     outer.init().unwrap();
@@ -194,9 +196,9 @@ fn nested_compositors_with_different_transports() {
 #[test]
 fn full_lifecycle_with_each_transport() {
     for (label, bus) in [
-        ("inprocess", Box::new(InProcessBus::new("ip")) as Box<dyn Bus>),
-        ("async", Box::new(AsyncBus::new("ab")) as Box<dyn Bus>),
-        ("network", Box::new(NetworkBus::new("nb")) as Box<dyn Bus>),
+        ("inprocess", Arc::new(InProcessBus::new("ip")) as Arc<dyn Bus>),
+        ("async", Arc::new(AsyncBus::new("ab")) as Arc<dyn Bus>),
+        ("network", Arc::new(NetworkBus::new("nb")) as Arc<dyn Bus>),
     ] {
         let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
             Box::new(Counter::new("a")),
@@ -228,14 +230,14 @@ fn full_lifecycle_with_each_transport() {
 fn dump_load_round_trip_with_each_transport() {
     for (label, bus1, bus2) in [
         ("inprocess",
-         Box::new(InProcessBus::new("b1")) as Box<dyn Bus>,
-         Box::new(InProcessBus::new("b2")) as Box<dyn Bus>),
+         Arc::new(InProcessBus::new("b1")) as Arc<dyn Bus>,
+         Arc::new(InProcessBus::new("b2")) as Arc<dyn Bus>),
         ("async",
-         Box::new(AsyncBus::new("b1")) as Box<dyn Bus>,
-         Box::new(AsyncBus::new("b2")) as Box<dyn Bus>),
+         Arc::new(AsyncBus::new("b1")) as Arc<dyn Bus>,
+         Arc::new(AsyncBus::new("b2")) as Arc<dyn Bus>),
         ("network",
-         Box::new(NetworkBus::new("b1")) as Box<dyn Bus>,
-         Box::new(NetworkBus::new("b2")) as Box<dyn Bus>),
+         Arc::new(NetworkBus::new("b1")) as Arc<dyn Bus>,
+         Arc::new(NetworkBus::new("b2")) as Arc<dyn Bus>),
     ] {
         // Run compositor 1 for 5 ticks and dump
         let partitions1: Vec<Box<dyn fpa_contract::Partition>> = vec![

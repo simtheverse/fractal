@@ -130,7 +130,7 @@ subscriber lifecycle fixes were applied. See Phase 3b below.
   - Phase 1: assemble shared context, swap buffers
   - Phase 2: step partitions (sequential), read from read buffer, write to write buffer
   - Phase 3: evaluate events (stub), collect outputs, process requests
-- [ ] **1C.4** Property test: run 100 ticks with random step orders → identical final state
+- [x] **1C.4** Property test: run 100 ticks with random step orders → identical final state
 - [x] **1C.5** All tests in track C pass
 
 ### Track F-core: Event Engine (Standalone)

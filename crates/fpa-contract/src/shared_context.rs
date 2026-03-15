@@ -28,3 +28,33 @@ impl Message for SharedContext {
     const VERSION: u32 = 1;
     const DELIVERY: DeliverySemantic = DeliverySemantic::LatestValue;
 }
+
+/// Request to dump the compositor's current state (FPA-023).
+///
+/// A partition publishes this on the bus to request a state dump.
+/// The compositor drains these during Phase 1 and produces a dump result.
+#[derive(Debug, Clone)]
+pub struct DumpRequest;
+
+impl Message for DumpRequest {
+    const NAME: &'static str = "DumpRequest";
+    const VERSION: u32 = 1;
+    const DELIVERY: DeliverySemantic = DeliverySemantic::Queued;
+}
+
+/// Request to load a state fragment into the compositor (FPA-023).
+///
+/// A partition publishes this on the bus to request a state load.
+/// The compositor drains these during Phase 1 (pre-tick), transiently
+/// pausing to satisfy FPA-023's idle precondition before applying.
+#[derive(Debug, Clone)]
+pub struct LoadRequest {
+    /// The TOML composition fragment to load.
+    pub fragment: toml::Value,
+}
+
+impl Message for LoadRequest {
+    const NAME: &'static str = "LoadRequest";
+    const VERSION: u32 = 1;
+    const DELIVERY: DeliverySemantic = DeliverySemantic::Queued;
+}

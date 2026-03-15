@@ -44,8 +44,8 @@ hacks that make tests pass.
 
 - **Partition trait** is strategy-neutral: `init/step/shutdown/contribute_state/load_state`.
   Both compositors implement it, enabling fractal nesting.
-- **Box<dyn Bus>** for runtime transport selection. Partitions never know which transport
-  is in use.
+- **Arc<dyn Bus>** for runtime transport selection with shared ownership. Partitions
+  never know which transport is in use.
 - **StateContribution** envelope wraps all `contribute_state()` output with freshness
   metadata (`state`, `fresh`, `age_ms`). Defined in fpa-contract.
 - **Synchronous shutdown is a signal, not a confirmation** under supervisory coordination
@@ -55,10 +55,7 @@ hacks that make tests pass.
 
 ## Research plan
 
-`PLAN.md` tracks all phases. Phases 0-4 are complete. Current state:
-- 282 tests across 6 crates
-- Phases 5-7 remain (network serialization, system tests, determinism/replaceability
-  evaluation, synthesis)
+`PLAN.md` tracks all phases and current progress.
 
 ## Development philosophy
 - When considering solutions, think critically and challenge assumptions, including the specification (the prototype aims to inform the spec after all.) 
@@ -67,6 +64,7 @@ hacks that make tests pass.
 - Treat the root cause, not the symptom.
 - For FPA to be successful, the prototype must be of the highest quality and a scalable bootstrap for FPA applications.
 - Uphold the FPA principles in all solutions- fractality, symmetry, drop-in replacability, runtime configurability, etc.
+- Dare to address core architectural tensions and design instead of avoiding or working around them.
 
 ## Testing discipline
 
@@ -79,8 +77,15 @@ hacks that make tests pass.
 
 ## Open feedback files
 
-- `docs/feedback/FPA-004-network.md` — NetworkBus serialization gap (deferred to Phase 5 Track J2)
-- `docs/feedback/FPA-030.md` — Diataxis documentation structure (deferred to Phase 7)
+Open findings and spec implications live in `docs/feedback/`.
+
+## Pull requests
+
+- Do not include "Generated with Claude Code" or similar attribution lines in PR bodies
+- To edit a PR after creation, use the REST API (not `gh pr edit`, which fails on
+  this repo due to a Projects Classic deprecation error):
+  `gh api repos/simtheverse/fractal/pulls/N --method PATCH -f body="..."`
+- Create PRs with `gh pr create --title "..." --body "..."`
 
 ## PR review threads
 

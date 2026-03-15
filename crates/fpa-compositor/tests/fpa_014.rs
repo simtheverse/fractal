@@ -1,5 +1,7 @@
 //! Tests for FPA-014: Compositor Tick Lifecycle (double-buffer isolation).
 
+use std::sync::Arc;
+
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::double_buffer::DoubleBuffer;
@@ -13,7 +15,7 @@ fn make_compositor(ids: &[&str]) -> Compositor {
         .map(|id| Box::new(Counter::new(*id)) as Box<dyn fpa_contract::Partition>)
         .collect();
     let bus = InProcessBus::new("test");
-    let mut comp = Compositor::new(partitions, Box::new(bus));
+    let mut comp = Compositor::new(partitions, Arc::new(bus));
     comp.init().unwrap();
     comp
 }
@@ -117,7 +119,7 @@ fn buffer_swap_occurs_before_stepping() {
     let partitions: Vec<Box<dyn fpa_contract::Partition>> =
         vec![Box::new(Counter::new("a"))];
     let bus = InProcessBus::new("test");
-    let mut comp = Compositor::new(partitions, Box::new(bus));
+    let mut comp = Compositor::new(partitions, Arc::new(bus));
     comp.init().unwrap();
 
     // We can't directly write to the compositor's buffer, so we use the
@@ -161,6 +163,54 @@ fn double_buffer_isolation() {
 
     // Write buffer is clear.
     assert!(buf.write_all().is_empty());
+}
+
+/// Test 1C.4: Step order independence across all permutations.
+///
+/// 3 partitions (a, b, c), all 6 permutations, 100 ticks each.
+/// Read and write buffers must be identical across all permutations,
+/// confirming that the double buffer prevents intra-tick visibility.
+#[test]
+fn step_order_independent_across_all_permutations() {
+    let permutations: [&[&str]; 6] = [
+        &["a", "b", "c"],
+        &["a", "c", "b"],
+        &["b", "a", "c"],
+        &["b", "c", "a"],
+        &["c", "a", "b"],
+        &["c", "b", "a"],
+    ];
+    let tick_count = 100;
+
+    // Run the reference permutation
+    let mut reference = make_compositor(permutations[0]);
+    for _ in 0..tick_count {
+        reference.run_tick(1.0).unwrap();
+    }
+    let ref_read = reference.buffer().read_all().clone();
+    let ref_write = reference.buffer().write_all().clone();
+
+    // Run each remaining permutation and compare
+    for perm in &permutations[1..] {
+        let mut comp = make_compositor(perm);
+        for _ in 0..tick_count {
+            comp.run_tick(1.0).unwrap();
+        }
+
+        let read = comp.buffer().read_all();
+        let write = comp.buffer().write_all();
+
+        assert_eq!(
+            &ref_read, read,
+            "read buffers differ for permutation {:?} vs {:?}",
+            permutations[0], perm
+        );
+        assert_eq!(
+            &ref_write, write,
+            "write buffers differ for permutation {:?} vs {:?}",
+            permutations[0], perm
+        );
+    }
 }
 
 /// Test: Buffer swap moves sentinel values to read side (unit-level).

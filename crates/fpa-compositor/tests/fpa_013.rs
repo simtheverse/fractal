@@ -1,5 +1,7 @@
 //! Tests for FPA-013: Direct signals — bypass relay chain within contract crate scope.
 
+use std::sync::Arc;
+
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::direct_signal::DirectSignalRegistry;
@@ -12,7 +14,7 @@ fn unregistered_signal_rejected() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut comp = Compositor::new(partitions, Box::new(bus)).with_id("comp");
+    let mut comp = Compositor::new(partitions, Arc::new(bus)).with_id("comp");
     comp.init().unwrap();
 
     let result = comp.emit_direct_signal("unknown_signal", "test reason", "partition_a");
@@ -26,7 +28,7 @@ fn registered_signal_emitted() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut comp = Compositor::new(partitions, Box::new(bus)).with_id("comp");
+    let mut comp = Compositor::new(partitions, Arc::new(bus)).with_id("comp");
     comp.register_direct_signal("emergency_stop");
     comp.init().unwrap();
 
@@ -47,7 +49,7 @@ fn signal_records_layer_depth() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut comp = Compositor::new(partitions, Box::new(bus))
+    let mut comp = Compositor::new(partitions, Arc::new(bus))
         .with_id("inner-comp")
         .with_layer_depth(2);
     comp.register_direct_signal("heartbeat");
@@ -66,7 +68,7 @@ fn signal_records_emitter_identity() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut comp = Compositor::new(partitions, Box::new(bus)).with_id("comp");
+    let mut comp = Compositor::new(partitions, Arc::new(bus)).with_id("comp");
     comp.register_direct_signal("status");
     comp.init().unwrap();
 
@@ -102,7 +104,7 @@ fn direct_signal_bypasses_relay_policy() {
         Box::new(Counter::new("B1")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let mut inner = Compositor::new(inner_partitions, Box::new(inner_bus))
+    let mut inner = Compositor::new(inner_partitions, Arc::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1)
         .with_relay_policy(RelayPolicy::Suppress);
@@ -142,7 +144,7 @@ fn inner_signals_propagate_to_outer_after_tick() {
         Box::new(Counter::new("B1")),
     ];
     let inner_bus = InProcessBus::new("inner-bus");
-    let mut inner = Compositor::new(inner_partitions, Box::new(inner_bus))
+    let mut inner = Compositor::new(inner_partitions, Arc::new(inner_bus))
         .with_id("B")
         .with_layer_depth(1);
 
@@ -155,7 +157,7 @@ fn inner_signals_propagate_to_outer_after_tick() {
         Box::new(inner),
     ];
     let outer_bus = InProcessBus::new("outer-bus");
-    let mut outer = Compositor::new(outer_partitions, Box::new(outer_bus))
+    let mut outer = Compositor::new(outer_partitions, Arc::new(outer_bus))
         .with_id("orchestrator");
 
     outer.init().unwrap();
@@ -184,7 +186,7 @@ fn signal_propagates_through_three_layers() {
         Box::new(Counter::new("C1")),
     ];
     let l2_bus = InProcessBus::new("layer-2-bus");
-    let mut l2 = Compositor::new(l2_partitions, Box::new(l2_bus))
+    let mut l2 = Compositor::new(l2_partitions, Arc::new(l2_bus))
         .with_id("L2")
         .with_layer_depth(2);
     l2.register_direct_signal("deep_alert");
@@ -195,7 +197,7 @@ fn signal_propagates_through_three_layers() {
         Box::new(l2),
     ];
     let l1_bus = InProcessBus::new("layer-1-bus");
-    let l1 = Compositor::new(l1_partitions, Box::new(l1_bus))
+    let l1 = Compositor::new(l1_partitions, Arc::new(l1_bus))
         .with_id("L1")
         .with_layer_depth(1);
 
@@ -205,7 +207,7 @@ fn signal_propagates_through_three_layers() {
         Box::new(l1),
     ];
     let l0_bus = InProcessBus::new("layer-0-bus");
-    let mut orchestrator = Compositor::new(l0_partitions, Box::new(l0_bus))
+    let mut orchestrator = Compositor::new(l0_partitions, Arc::new(l0_bus))
         .with_id("orchestrator");
 
     orchestrator.init().unwrap();
@@ -228,7 +230,7 @@ fn signals_can_be_cleared() {
         Box::new(Counter::new("a")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut comp = Compositor::new(partitions, Box::new(bus)).with_id("comp");
+    let mut comp = Compositor::new(partitions, Arc::new(bus)).with_id("comp");
     comp.register_direct_signal("sig");
     comp.init().unwrap();
 

@@ -4,9 +4,10 @@
 //! integrates fault handling (FPA-011) and the shared state machine (FPA-006).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use fpa_bus::{Bus, BusExt, InProcessBus};
-use fpa_contract::{Partition, PartitionError, StateContribution};
+use fpa_bus::{Bus, BusExt, BusReader, InProcessBus, TypedReader};
+use fpa_contract::{DumpRequest, LoadRequest, Partition, PartitionError, StateContribution};
 use fpa_events::EventEngine;
 
 // Re-export SharedContext so downstream code importing from compositor::SharedContext still works.
@@ -52,7 +53,7 @@ pub struct Compositor {
     /// Unique identifier for this compositor instance.
     id: String,
     partitions: Vec<Box<dyn Partition>>,
-    bus: Box<dyn Bus>,
+    bus: Arc<dyn Bus>,
     state_machine: StateMachine,
     double_buffer: DoubleBuffer,
     /// Fallback partitions keyed by the ID of the partition they replace.
@@ -84,15 +85,25 @@ pub struct Compositor {
     last_dump_result: Option<toml::Value>,
     /// Pending load request for Phase 1 processing (FPA-014, FPA-023).
     pending_load: Option<toml::Value>,
+    /// Bus reader for transition requests (FPA-006).
+    transition_reader: TypedReader<TransitionRequest>,
+    /// Bus reader for dump requests (FPA-023).
+    dump_reader: TypedReader<DumpRequest>,
+    /// Bus reader for load requests (FPA-023).
+    load_reader: TypedReader<LoadRequest>,
 }
 
 impl Compositor {
     /// Create a new compositor with the given partitions and bus.
     ///
-    /// Accepts any `Bus` implementation via `Box<dyn Bus>`, enabling runtime
-    /// transport selection (FPA-004). For convenience with `InProcessBus`,
-    /// use `Compositor::new_default`.
-    pub fn new(partitions: Vec<Box<dyn Partition>>, bus: Box<dyn Bus>) -> Self {
+    /// Accepts any `Bus` implementation via `Arc<dyn Bus>`, enabling runtime
+    /// transport selection (FPA-004) and shared ownership so partitions can
+    /// hold bus references at construction time.
+    /// For convenience with `InProcessBus`, use `Compositor::new_default`.
+    pub fn new(partitions: Vec<Box<dyn Partition>>, bus: Arc<dyn Bus>) -> Self {
+        let transition_reader = bus.subscribe::<TransitionRequest>();
+        let dump_reader = bus.subscribe::<DumpRequest>();
+        let load_reader = bus.subscribe::<LoadRequest>();
         Self {
             id: "compositor".to_string(),
             partitions,
@@ -114,6 +125,9 @@ impl Compositor {
             pending_dump: false,
             last_dump_result: None,
             pending_load: None,
+            transition_reader,
+            dump_reader,
+            load_reader,
         }
     }
 
@@ -122,7 +136,7 @@ impl Compositor {
     /// Convenience constructor for the common case where in-process transport
     /// is sufficient.
     pub fn new_default(partitions: Vec<Box<dyn Partition>>, bus_id: impl Into<String>) -> Self {
-        Self::new(partitions, Box::new(InProcessBus::new(bus_id)))
+        Self::new(partitions, Arc::new(InProcessBus::new(bus_id)))
     }
 
     /// Set the compositor ID.
@@ -261,18 +275,26 @@ impl Compositor {
     /// If the primary partition faults during step(), the fallback will be
     /// activated in its place and the compositor will continue without error.
     ///
-    /// # Panics
-    /// Panics if the fallback's `id()` does not match `partition_id`.
-    pub fn register_fallback(&mut self, partition_id: impl Into<String>, fallback: Box<dyn Partition>) {
+    /// Returns an error if the fallback's `id()` does not match `partition_id`.
+    pub fn register_fallback(
+        &mut self,
+        partition_id: impl Into<String>,
+        fallback: Box<dyn Partition>,
+    ) -> Result<(), PartitionError> {
         let partition_id = partition_id.into();
-        assert_eq!(
-            fallback.id(),
-            partition_id,
-            "fallback id '{}' must match partition id '{}'",
-            fallback.id(),
-            partition_id
-        );
+        if fallback.id() != partition_id {
+            return Err(self.make_error(
+                &partition_id,
+                "register_fallback",
+                format!(
+                    "fallback id '{}' must match partition id '{}'",
+                    fallback.id(),
+                    partition_id,
+                ),
+            ));
+        }
         self.fallbacks.insert(partition_id, fallback);
+        Ok(())
     }
 
     /// Get the current execution state.
@@ -293,6 +315,11 @@ impl Compositor {
     /// Get a reference to the bus.
     pub fn bus(&self) -> &dyn Bus {
         &*self.bus
+    }
+
+    /// Get a shared reference to the bus (for partition injection).
+    pub fn bus_arc(&self) -> &Arc<dyn Bus> {
+        &self.bus
     }
 
     /// Get a reference to the double buffer.
@@ -496,10 +523,12 @@ impl Compositor {
                 .collect();
         }
 
-        // Steps 2-4: Collect outputs, process bus requests, relay qualified requests.
-        // (Outputs collected during Phase 2 loop above; relay via drain_relayed_requests.)
+        // Step 2: Process bus-mediated transition requests (FPA-006).
+        for request in self.transition_reader.read_all() {
+            self.process_transition_request(request)?;
+        }
 
-        // Step 5: Check for pending direct signals.
+        // Step 3: Check for pending direct signals.
         self.collect_inner_signals();
 
         Ok(())
@@ -631,17 +660,50 @@ impl Compositor {
 
     /// Process pending dump and load requests (FPA-014 Phase 1 step 3, FPA-023).
     ///
-    /// Dump invokes `contribute_state()` on all partitions using post-tick-N-1
-    /// state. Load replaces partition state via `load_state()`.
+    /// Drains bus-mediated DumpRequest/LoadRequest messages and merges them
+    /// with programmatic requests. Dump invokes `contribute_state()` on all
+    /// partitions using post-tick-N-1 state.
+    ///
+    /// Load requires the execution state machine to be in a non-processing
+    /// state (FPA-023). Phase 1 transiently pauses the compositor before
+    /// applying loads, then resumes — the same pattern used by
+    /// `Partition::load_state()` for nested compositors.
     fn process_pending_dump_load(&mut self) -> Result<(), PartitionError> {
+        // Drain bus-mediated dump requests
+        if !self.dump_reader.read_all().is_empty() {
+            self.pending_dump = true;
+        }
+
         if self.pending_dump {
             self.pending_dump = false;
             self.last_dump_result = Some(self.dump()?);
         }
-        if let Some(fragment) = self.pending_load.take() {
-            self.apply_state_fragment(fragment)?;
+
+        // Collect all pending loads: bus-mediated first, then programmatic
+        // (last applied wins, so the explicit API takes precedence).
+        let bus_loads: Vec<_> = self.load_reader.read_all();
+        let programmatic_load = self.pending_load.take();
+
+        if bus_loads.is_empty() && programmatic_load.is_none() {
+            return Ok(());
         }
-        Ok(())
+
+        // Transiently pause to satisfy FPA-023's idle precondition, apply
+        // all loads, then resume. No partition methods are called during
+        // pause/resume, and SharedContext isn't published until Phase 2,
+        // so the transient Paused state is not observable.
+        self.pause()?;
+        let result = (|| {
+            for load_req in bus_loads {
+                self.apply_state_fragment(load_req.fragment)?;
+            }
+            if let Some(fragment) = programmatic_load {
+                self.apply_state_fragment(fragment)?;
+            }
+            Ok(())
+        })();
+        self.resume()?;
+        result
     }
 
     /// Apply a state fragment to partitions and system counters.

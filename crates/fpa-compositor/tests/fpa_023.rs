@@ -1,5 +1,7 @@
 //! Tests for FPA-023: Dump/Load Operations.
 
+use std::sync::Arc;
+
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::Counter;
@@ -13,7 +15,7 @@ fn dump_invokes_contribute_state_on_all_partitions() {
         Box::new(Counter::new("b")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     compositor.run_tick(1.0).unwrap();
@@ -54,7 +56,7 @@ fn load_restores_state_via_load_state() {
         Box::new(Counter::new("counter")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     compositor.pause().unwrap();
@@ -80,7 +82,7 @@ fn round_trip_identity() {
         Box::new(Counter::new("counter")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut comp1 = Compositor::new(partitions, Box::new(bus));
+    let mut comp1 = Compositor::new(partitions, Arc::new(bus));
 
     comp1.init().unwrap();
     for _ in 0..5 {
@@ -94,7 +96,7 @@ fn round_trip_identity() {
         Box::new(Counter::new("counter")),
     ];
     let bus2 = InProcessBus::new("test-bus-2");
-    let mut comp2 = Compositor::new(partitions2, Box::new(bus2));
+    let mut comp2 = Compositor::new(partitions2, Arc::new(bus2));
 
     comp2.init().unwrap();
     comp2.pause().unwrap();
@@ -119,7 +121,7 @@ fn load_while_running_is_rejected() {
         Box::new(Counter::new("counter")),
     ];
     let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Box::new(bus));
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
 
     compositor.init().unwrap();
     assert_eq!(compositor.state(), fpa_compositor::state_machine::ExecutionState::Running);
@@ -165,7 +167,7 @@ fn round_trip_with_continued_execution() {
         Box::new(Counter::new("counter")),
     ];
     let bus_a = InProcessBus::new("bus-a");
-    let mut comp_a = Compositor::new(partitions_a, Box::new(bus_a));
+    let mut comp_a = Compositor::new(partitions_a, Arc::new(bus_a));
 
     comp_a.init().unwrap();
     for _ in 0..n {
@@ -179,7 +181,7 @@ fn round_trip_with_continued_execution() {
         Box::new(Counter::new("counter")),
     ];
     let bus_a2 = InProcessBus::new("bus-a2");
-    let mut comp_a2 = Compositor::new(partitions_a2, Box::new(bus_a2));
+    let mut comp_a2 = Compositor::new(partitions_a2, Arc::new(bus_a2));
 
     comp_a2.init().unwrap();
     comp_a2.pause().unwrap();
@@ -195,7 +197,7 @@ fn round_trip_with_continued_execution() {
         Box::new(Counter::new("counter")),
     ];
     let bus_b = InProcessBus::new("bus-b");
-    let mut comp_b = Compositor::new(partitions_b, Box::new(bus_b));
+    let mut comp_b = Compositor::new(partitions_b, Arc::new(bus_b));
 
     comp_b.init().unwrap();
     for _ in 0..(n + m) {

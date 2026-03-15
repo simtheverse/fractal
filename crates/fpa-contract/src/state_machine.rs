@@ -7,6 +7,8 @@
 use std::cell::Cell;
 use std::fmt;
 
+use crate::message::{DeliverySemantic, Message};
+
 /// Execution states for the compositor lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionState {
@@ -38,6 +40,12 @@ impl fmt::Display for ExecutionState {
 pub struct TransitionRequest {
     pub requested_by: String,
     pub target_state: ExecutionState,
+}
+
+impl Message for TransitionRequest {
+    const NAME: &'static str = "TransitionRequest";
+    const VERSION: u32 = 1;
+    const DELIVERY: DeliverySemantic = DeliverySemantic::Queued;
 }
 
 /// Error returned when a state transition is invalid.

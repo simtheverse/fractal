@@ -4,6 +4,8 @@
 //! that hold regardless of which partition implementation is used. Swapping
 //! Counter for Accumulator or Doubler must not cause these tests to fail.
 
+use std::sync::Arc;
+
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::state_machine::ExecutionState;
@@ -16,7 +18,7 @@ use fpa_contract::test_support::{Accumulator, Counter, Doubler};
 
 fn make_compositor(partitions: Vec<Box<dyn Partition>>) -> Compositor {
     let bus = InProcessBus::new("test-bus");
-    Compositor::new(partitions, Box::new(bus))
+    Compositor::new(partitions, Arc::new(bus))
 }
 
 // ---------------------------------------------------------------------------
