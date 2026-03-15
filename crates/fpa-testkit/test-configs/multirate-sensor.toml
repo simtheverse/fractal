@@ -1,6 +1,8 @@
-# Multi-rate bus communication: fast Sensor + normal Follower + Counter
-# Sensor at 4x rate publishes readings each sub-tick; Follower at 1x
-# sees only the last reading per outer tick (LatestValue semantic).
+# Multi-rate bus communication: Sensor + Follower + Counter
+# Rate configuration is applied programmatically via set_rate_config();
+# this fragment defines the partition topology. When fast_sensor is set
+# to rate 4, Follower at rate 1 sees only the last reading per outer
+# tick (LatestValue semantic).
 
 [system]
 timestep = 1.0

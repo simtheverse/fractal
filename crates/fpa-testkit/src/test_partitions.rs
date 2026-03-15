@@ -142,12 +142,19 @@ impl Partition for Sensor {
 
         self.scale = table.get("scale").and_then(|v| v.as_float()).ok_or_else(|| err("scale"))?;
         self.offset = table.get("offset").and_then(|v| v.as_float()).ok_or_else(|| err("offset"))?;
-        self.step_count = table.get("step_count").and_then(|v| v.as_integer()).ok_or_else(|| err("step_count"))?;
+        let step_count = table.get("step_count").and_then(|v| v.as_integer()).ok_or_else(|| err("step_count"))?;
+        if step_count < 0 {
+            return Err(PartitionError::new(&self.id, "load_state", "step_count is negative"));
+        }
+        self.step_count = step_count;
 
         let history_arr = table.get("history").and_then(|v| v.as_array()).ok_or_else(|| err("history"))?;
         self.history.clear();
         for entry in history_arr {
             let tick = entry.get("tick").and_then(|v| v.as_integer()).ok_or_else(|| err("history[].tick"))?;
+            if tick < 0 {
+                return Err(PartitionError::new(&self.id, "load_state", "history[].tick is negative"));
+            }
             let value = entry.get("value").and_then(|v| v.as_float()).ok_or_else(|| err("history[].value"))?;
             self.history.push((tick, value));
         }
@@ -265,7 +272,11 @@ impl Partition for Follower {
         };
 
         self.last_reading = table.get("last_reading").and_then(|v| v.as_float()).ok_or_else(|| err("last_reading"))?;
-        self.commands_sent = table.get("commands_sent").and_then(|v| v.as_integer()).ok_or_else(|| err("commands_sent"))?;
+        let commands_sent = table.get("commands_sent").and_then(|v| v.as_integer()).ok_or_else(|| err("commands_sent"))?;
+        if commands_sent < 0 {
+            return Err(PartitionError::new(&self.id, "load_state", "commands_sent is negative"));
+        }
+        self.commands_sent = commands_sent;
         self.threshold = table.get("threshold").and_then(|v| v.as_float()).ok_or_else(|| err("threshold"))?;
 
         Ok(())
@@ -331,7 +342,9 @@ impl Partition for Recorder {
 
         // Consume SharedContext (LatestValue).
         if let Some(ctx) = self.context_reader.read() {
-            self.last_tick_seen = ctx.tick as i64;
+            self.last_tick_seen = i64::try_from(ctx.tick).map_err(|_| {
+                PartitionError::new(&self.id, "step", "tick exceeds i64::MAX")
+            })?;
             self.entries_logged += 1;
         }
 
@@ -373,9 +386,21 @@ impl Partition for Recorder {
             PartitionError::new(&self.id, "load_state", format!("missing or invalid field '{}'", field))
         };
 
-        self.entries_logged = table.get("entries_logged").and_then(|v| v.as_integer()).ok_or_else(|| err("entries_logged"))?;
-        self.commands_received = table.get("commands_received").and_then(|v| v.as_integer()).ok_or_else(|| err("commands_received"))?;
-        self.last_tick_seen = table.get("last_tick_seen").and_then(|v| v.as_integer()).ok_or_else(|| err("last_tick_seen"))?;
+        let entries_logged = table.get("entries_logged").and_then(|v| v.as_integer()).ok_or_else(|| err("entries_logged"))?;
+        if entries_logged < 0 {
+            return Err(PartitionError::new(&self.id, "load_state", "entries_logged is negative"));
+        }
+        self.entries_logged = entries_logged;
+        let commands_received = table.get("commands_received").and_then(|v| v.as_integer()).ok_or_else(|| err("commands_received"))?;
+        if commands_received < 0 {
+            return Err(PartitionError::new(&self.id, "load_state", "commands_received is negative"));
+        }
+        self.commands_received = commands_received;
+        let last_tick_seen = table.get("last_tick_seen").and_then(|v| v.as_integer()).ok_or_else(|| err("last_tick_seen"))?;
+        if last_tick_seen < 0 {
+            return Err(PartitionError::new(&self.id, "load_state", "last_tick_seen is negative"));
+        }
+        self.last_tick_seen = last_tick_seen;
 
         Ok(())
     }
