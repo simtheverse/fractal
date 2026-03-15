@@ -9,7 +9,7 @@
 /// Both lock-step and supervisory compositors wrap each partition's
 /// `contribute_state()` output in this type, ensuring the outer layer
 /// sees the same format regardless of execution strategy.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateContribution {
     /// The partition's actual state.
     pub state: toml::Value,

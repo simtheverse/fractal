@@ -4,6 +4,8 @@
 //! crate (not the compositor) so that partitions can subscribe to it without
 //! depending on the compositor crate — consistent with FPA-003 and FPA-005.
 
+use serde::{Deserialize, Serialize};
+
 use crate::message::{DeliverySemantic, Message};
 use crate::state_machine::ExecutionState;
 
@@ -13,7 +15,7 @@ use crate::state_machine::ExecutionState;
 /// and publishes them as a single `SharedContext` message on the layer bus.
 /// Partitions subscribe to this type to observe their peers' state and the
 /// compositor's execution state (FPA-009).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SharedContext {
     /// Aggregated partition states keyed by partition ID.
     pub state: toml::Value,
@@ -33,7 +35,7 @@ impl Message for SharedContext {
 ///
 /// A partition publishes this on the bus to request a state dump.
 /// The compositor drains these during Phase 1 and produces a dump result.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DumpRequest;
 
 impl Message for DumpRequest {
@@ -47,7 +49,7 @@ impl Message for DumpRequest {
 /// A partition publishes this on the bus to request a state load.
 /// The compositor drains these during Phase 1 (pre-tick), transiently
 /// pausing to satisfy FPA-023's idle precondition before applying.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadRequest {
     /// The TOML composition fragment to load.
     pub fragment: toml::Value,

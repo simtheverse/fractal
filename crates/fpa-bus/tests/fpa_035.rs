@@ -6,10 +6,11 @@
 
 use fpa_bus::{AsyncBus, Bus, BusExt, BusReader, InProcessBus, NetworkBus, Transport};
 use fpa_contract::{DeliverySemantic, Message};
+use serde::{Deserialize, Serialize};
 
 // --- Test message types ----------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Temperature(f64);
 
 impl Message for Temperature {
@@ -18,7 +19,7 @@ impl Message for Temperature {
     const DELIVERY: DeliverySemantic = DeliverySemantic::LatestValue;
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Command(String);
 
 impl Message for Command {
@@ -27,7 +28,7 @@ impl Message for Command {
     const DELIVERY: DeliverySemantic = DeliverySemantic::Queued;
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Counter(f64);
 
 impl Message for Counter {
@@ -307,8 +308,19 @@ fn buses_are_independent_async() {
 // that all three bus implementations produce identical results for a multi-tick
 // publish/subscribe pattern.
 
+/// Helper: create a NetworkBus with codecs for test message types.
+fn network_bus_with_test_codecs(id: &str) -> NetworkBus {
+    let bus = NetworkBus::new(id);
+    bus.register_codec::<Temperature>();
+    bus.register_codec::<Command>();
+    bus.register_codec::<Counter>();
+    bus.register_codec::<SharedContext>();
+    bus.register_codec::<TickEvent>();
+    bus
+}
+
 /// Shared context published each compositor tick (LatestValue semantic).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct SharedContext {
     tick: u32,
     value: f64,
@@ -321,7 +333,7 @@ impl Message for SharedContext {
 }
 
 /// Event log produced each tick (Queued semantic).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct TickEvent(u32);
 
 impl Message for TickEvent {
@@ -385,7 +397,7 @@ fn compositor_workflow_simulation_async() {
 
 #[test]
 fn compositor_workflow_simulation_network() {
-    compositor_workflow_simulation(NetworkBus::new("comp"), "Network");
+    compositor_workflow_simulation(network_bus_with_test_codecs("comp"), "Network");
 }
 
 /// Verifies that subscribing mid-workflow only sees messages from that point forward,
@@ -444,5 +456,5 @@ fn late_subscriber_workflow_async() {
 
 #[test]
 fn late_subscriber_workflow_network() {
-    late_subscriber_workflow(NetworkBus::new("late"), "Network");
+    late_subscriber_workflow(network_bus_with_test_codecs("late"), "Network");
 }

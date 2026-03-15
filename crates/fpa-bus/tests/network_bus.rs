@@ -1,9 +1,8 @@
-// Network bus stub tests (FPA-004).
+// Network bus tests (FPA-004).
 //
 // Verifies that NetworkBus implements the Bus trait with Transport::Network,
-// delivers messages correctly, and can coexist with InProcessBus at different
-// layers. Also demonstrates a serde round-trip to prove that message types
-// with Serialize/Deserialize can survive network-style serialization.
+// delivers messages correctly through real serialization round-trips, and can
+// coexist with InProcessBus at different layers.
 
 use fpa_bus::{AsyncBus, Bus, BusExt, BusReader, InProcessBus, NetworkBus, Transport};
 use fpa_contract::{DeliverySemantic, Message};
@@ -27,29 +26,36 @@ impl Message for SensorReading {
     const DELIVERY: DeliverySemantic = DeliverySemantic::LatestValue;
 }
 
+/// Helper: create a NetworkBus with codecs for test message types.
+fn test_bus(id: &str) -> NetworkBus {
+    let bus = NetworkBus::new(id);
+    bus.register_codec::<Ping>();
+    bus.register_codec::<SensorReading>();
+    bus
+}
 
 #[test]
 fn network_bus_reports_network_transport() {
-    let bus = NetworkBus::new("net-0");
+    let bus = test_bus("net-0");
     assert_eq!(bus.transport(), Transport::Network);
 }
 
 #[test]
 fn network_bus_id_is_queryable() {
-    let bus = NetworkBus::new("net-layer-0");
+    let bus = test_bus("net-layer-0");
     assert_eq!(bus.id(), "net-layer-0");
 }
 
 #[test]
 fn network_bus_implements_bus_trait() {
     fn assert_bus<T: Bus>(_: &T) {}
-    let bus = NetworkBus::new("test");
+    let bus = test_bus("test");
     assert_bus(&bus);
 }
 
 #[test]
 fn network_bus_publish_subscribe_queued() {
-    let bus = NetworkBus::new("net");
+    let bus = test_bus("net");
     let mut reader = bus.subscribe::<Ping>();
 
     bus.publish(Ping(1));
@@ -64,7 +70,7 @@ fn network_bus_publish_subscribe_queued() {
 
 #[test]
 fn network_bus_publish_subscribe_latest_value() {
-    let bus = NetworkBus::new("net");
+    let bus = test_bus("net");
     let mut reader = bus.subscribe::<SensorReading>();
 
     bus.publish(SensorReading(1.0));
@@ -78,7 +84,7 @@ fn network_bus_publish_subscribe_latest_value() {
 
 #[test]
 fn network_bus_read_all() {
-    let bus = NetworkBus::new("net");
+    let bus = test_bus("net");
     let mut reader = bus.subscribe::<Ping>();
 
     bus.publish(Ping(10));
@@ -92,7 +98,7 @@ fn network_bus_read_all() {
 #[test]
 fn network_and_inprocess_coexist_at_different_layers() {
     // Layer 0: Network transport
-    let net_bus = NetworkBus::new("layer-0");
+    let net_bus = test_bus("layer-0");
     // Layer 1: InProcess transport
     let ip_bus = InProcessBus::new("layer-1");
 
@@ -143,7 +149,7 @@ fn network_and_inprocess_coexist_at_different_layers() {
 #[test]
 fn all_three_transports_are_fully_isolated() {
     // Verify that NetworkBus, InProcessBus, and AsyncBus are completely independent.
-    let net = NetworkBus::new("net");
+    let net = test_bus("net");
     let ip = InProcessBus::new("ip");
     let ab = AsyncBus::new("ab");
 
@@ -168,7 +174,7 @@ fn all_three_transports_are_fully_isolated() {
 
 #[test]
 fn network_bus_multiple_subscribers_independent() {
-    let bus = NetworkBus::new("net");
+    let bus = test_bus("net");
 
     let mut r1 = bus.subscribe::<Ping>();
     let mut r2 = bus.subscribe::<Ping>();
@@ -194,45 +200,45 @@ fn network_bus_is_send() {
     assert_send::<NetworkBus>();
 }
 
-/// Demonstrates that message types with serde derives can survive a TOML
-/// serialization round-trip — proving that network transport serialization
-/// is feasible for messages that opt into serde.
-///
-/// See docs/feedback/FPA-004-network.md for the serialization gap analysis.
+/// Proves that messages survive a full serialization round-trip through the
+/// NetworkBus — serialized to JSON bytes on publish, deserialized on read.
 #[test]
-fn serde_toml_round_trip_proof_of_concept() {
-    // A struct-style message that works naturally with TOML.
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    struct NetworkPing {
-        sequence: u32,
+fn serialization_round_trip_through_bus() {
+    let bus = test_bus("net");
+
+    // Queued message round-trip
+    let mut ping_reader = bus.subscribe::<Ping>();
+    bus.publish(Ping(42));
+    let received = ping_reader.read().expect("should receive serialized Ping");
+    assert_eq!(received, Ping(42));
+
+    // LatestValue message round-trip
+    let mut sensor_reader = bus.subscribe::<SensorReading>();
+    bus.publish(SensorReading(98.6));
+    bus.publish(SensorReading(99.1));
+    let received = sensor_reader.read().expect("should receive serialized SensorReading");
+    assert_eq!(received, SensorReading(99.1));
+}
+
+/// Verifies that NetworkBus produces identical results to InProcessBus
+/// for the same publish/subscribe pattern.
+#[test]
+fn network_bus_identical_to_inprocess() {
+    let net = test_bus("net");
+    let ip = InProcessBus::new("ip");
+
+    let mut net_ping = net.subscribe::<Ping>();
+    let mut ip_ping = ip.subscribe::<Ping>();
+    let mut net_sensor = net.subscribe::<SensorReading>();
+    let mut ip_sensor = ip.subscribe::<SensorReading>();
+
+    for i in 0..5 {
+        net.publish(Ping(i));
+        ip.publish(Ping(i));
+        net.publish(SensorReading(i as f64 * 1.5));
+        ip.publish(SensorReading(i as f64 * 1.5));
     }
 
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    struct NetworkSensor {
-        value: f64,
-        unit: String,
-    }
-
-    // Queued message round-trip.
-    let original_ping = NetworkPing { sequence: 42 };
-    let toml_str = toml::to_string(&original_ping).expect("serialize NetworkPing to TOML");
-    let deserialized_ping: NetworkPing =
-        toml::from_str(&toml_str).expect("deserialize NetworkPing from TOML");
-    assert_eq!(
-        original_ping, deserialized_ping,
-        "NetworkPing should survive TOML round-trip"
-    );
-
-    // LatestValue message round-trip.
-    let original_sensor = NetworkSensor {
-        value: 98.6,
-        unit: "fahrenheit".to_string(),
-    };
-    let toml_str = toml::to_string(&original_sensor).expect("serialize NetworkSensor to TOML");
-    let deserialized_sensor: NetworkSensor =
-        toml::from_str(&toml_str).expect("deserialize NetworkSensor from TOML");
-    assert_eq!(
-        original_sensor, deserialized_sensor,
-        "NetworkSensor should survive TOML round-trip"
-    );
+    assert_eq!(net_ping.read_all(), ip_ping.read_all());
+    assert_eq!(net_sensor.read(), ip_sensor.read());
 }

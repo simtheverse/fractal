@@ -7,10 +7,12 @@
 use std::cell::Cell;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::message::{DeliverySemantic, Message};
 
 /// Execution states for the compositor lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExecutionState {
     Uninitialized,
     Initializing,
@@ -36,7 +38,7 @@ impl fmt::Display for ExecutionState {
 }
 
 /// A request to transition the state machine to a new state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitionRequest {
     pub requested_by: String,
     pub target_state: ExecutionState,

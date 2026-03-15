@@ -1,0 +1,11 @@
+# Basic composition: Counter + Accumulator
+# Used by FPA-033 and FPA-034 system tests.
+
+[system]
+timestep = 0.016666666666666666
+
+[partitions.counter]
+implementation = "Counter"
+
+[partitions.accumulator]
+implementation = "Accumulator"
