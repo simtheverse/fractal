@@ -78,10 +78,15 @@ impl System {
     /// otherwise uses the provided `dt`.
     ///
     /// Performs: init -> run_tick x N -> dump -> shutdown -> return state.
-    /// Shutdown is always attempted, even if ticking or dumping fails.
+    /// Shutdown is always attempted after init, even if a later step fails.
     pub fn run(&mut self, ticks: u64, dt: f64) -> Result<toml::Value, SystemError> {
         let actual_dt = self.dt.unwrap_or(dt);
-        self.compositor.init()?;
+        if let Err(e) = self.compositor.init() {
+            // Best-effort shutdown for any partitions that initialized
+            // before the failure.
+            let _ = self.compositor.shutdown();
+            return Err(e.into());
+        }
 
         let result = (|| {
             for _ in 0..ticks {

@@ -123,14 +123,18 @@ impl From<PartitionError> for ComposeError {
 /// Compose a compositor from a configuration fragment.
 ///
 /// This is the canonical operator entry point. It creates partition instances
-/// from the fragment's partition entries using the registry, wires events
-/// from the fragment, and returns a ready-to-use compositor.
+/// from the fragment's partition entries using the registry, wires system-level
+/// events from the fragment, and returns a ready-to-use compositor.
 ///
 /// The bus is passed to each partition factory so that partitions needing
 /// inter-partition communication are guaranteed to use the compositor's bus.
 ///
 /// Partition iteration follows `BTreeMap` ordering (alphabetical by ID),
 /// which determines stepping order within a tick.
+///
+/// Note: partition-scoped events (`PartitionConfig.events`) are not yet wired
+/// by this function — that requires per-partition event engine support in the
+/// compositor.
 pub fn compose(
     fragment: &CompositionFragment,
     registry: &PartitionRegistry,
