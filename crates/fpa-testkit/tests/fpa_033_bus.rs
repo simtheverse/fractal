@@ -329,6 +329,74 @@ fn follower_recorder_state_round_trip() {
     assert_eq!(state, reloaded, "recorder state should round-trip");
 }
 
+/// All 6 permutations of [sensor, follower, recorder] produce identical state.
+///
+/// This is the strongest evidence for FPA-014 compliance with bus messages:
+/// all 3! = 6 stepping orders yield the same final state after 10 ticks,
+/// confirming that DeferredBus eliminates all ordering dependence.
+///
+/// Compare with fpa_014.rs `step_order_independent_across_all_permutations`
+/// which tests double-buffer isolation for SharedContext with non-bus partitions.
+#[test]
+fn bus_communication_order_independent_across_all_permutations() {
+    // All 6 permutations of 3 elements
+    let orders: [(usize, usize, usize); 6] = [
+        (0, 1, 2), // sensor, follower, recorder
+        (0, 2, 1), // sensor, recorder, follower
+        (1, 0, 2), // follower, sensor, recorder
+        (1, 2, 0), // follower, recorder, sensor
+        (2, 0, 1), // recorder, sensor, follower
+        (2, 1, 0), // recorder, follower, sensor
+    ];
+    let names = ["sensor", "follower", "recorder"];
+
+    let mut reference_state: Option<toml::Value> = None;
+
+    for (pi, &(a, b, c)) in orders.iter().enumerate() {
+        let inner = Arc::new(InProcessBus::new("test"));
+        let deferred = Arc::new(DeferredBus::new(inner));
+        let bus: Arc<dyn Bus> = deferred.clone();
+
+        // Build partition list in permuted order
+        let make = |idx: usize| -> Box<dyn Partition> {
+            match idx {
+                0 => Box::new(Sensor::new("sensor", bus.clone(), 1.5, 0.0)),
+                1 => Box::new(Follower::new("follower", bus.clone(), 5.0)),
+                2 => Box::new(Recorder::new("recorder", bus.clone())),
+                _ => unreachable!(),
+            }
+        };
+        let partitions: Vec<Box<dyn Partition>> = vec![make(a), make(b), make(c)];
+        let mut compositor = Compositor::from_deferred_bus(partitions, deferred);
+
+        compositor.init().unwrap();
+        for _ in 0..10 {
+            compositor.run_tick(1.0).unwrap();
+        }
+
+        let state = compositor.dump().unwrap();
+        compositor.shutdown().unwrap();
+
+        // Normalize: extract just the partition states for comparison
+        let partitions_table = state.as_table().unwrap()["partitions"].as_table().unwrap();
+
+        if let Some(ref expected) = reference_state {
+            let expected_table = expected.as_table().unwrap()["partitions"].as_table().unwrap();
+            for name in &names {
+                let expected_sc = StateContribution::from_toml(&expected_table[*name]).unwrap();
+                let actual_sc = StateContribution::from_toml(&partitions_table[*name]).unwrap();
+                assert_eq!(
+                    expected_sc.state, actual_sc.state,
+                    "permutation {} [{}, {}, {}]: partition '{}' state differs from reference",
+                    pi, names[a], names[b], names[c], name,
+                );
+            }
+        } else {
+            reference_state = Some(state);
+        }
+    }
+}
+
 /// Config-driven composition via composition function (FPA-019).
 ///
 /// With DeferredBus, partition IDs no longer need prefixes to control
