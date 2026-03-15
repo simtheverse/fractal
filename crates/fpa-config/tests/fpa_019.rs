@@ -1,6 +1,6 @@
 //! FPA-019: Composition Fragments — parsing TOML into CompositionFragment.
 
-use fpa_config::load_from_str;
+use fpa_config::{load_from_str, ConfigError};
 
 const FRAGMENT_TOML: &str = r#"
 [system]
@@ -78,4 +78,50 @@ fn fragment_round_trip_serialization() {
         });
         assert_eq!(orig_val, re_val);
     }
+}
+
+// --- ConfigError coverage ---
+
+/// ConfigError::ParseError display contains "parse error".
+#[test]
+fn config_error_parse_display() {
+    let err = ConfigError::ParseError("bad input".into());
+    let display = err.to_string();
+    assert!(display.contains("parse error"), "should contain 'parse error': {}", display);
+    assert!(display.contains("bad input"), "should contain detail: {}", display);
+}
+
+/// ConfigError::CircularExtends display contains "circular extends".
+#[test]
+fn config_error_circular_extends_display() {
+    let err = ConfigError::CircularExtends("a -> b -> a".into());
+    let display = err.to_string();
+    assert!(display.contains("circular extends"), "should contain 'circular extends': {}", display);
+}
+
+/// ConfigError::UnknownFragment display contains "unknown fragment".
+#[test]
+fn config_error_unknown_fragment_display() {
+    let err = ConfigError::UnknownFragment("missing_frag".into());
+    let display = err.to_string();
+    assert!(display.contains("unknown fragment"), "should contain 'unknown fragment': {}", display);
+}
+
+/// ConfigError::ValidationError display contains "validation error".
+#[test]
+fn config_error_validation_display() {
+    let err = ConfigError::ValidationError("bad field".into());
+    let display = err.to_string();
+    assert!(display.contains("validation error"), "should contain 'validation error': {}", display);
+}
+
+/// ConfigError implements std::error::Error.
+#[test]
+fn config_error_implements_std_error() {
+    use std::error::Error;
+    let err = ConfigError::ParseError("test".into());
+    // Verify Error trait is implemented and source() returns None
+    assert!(err.source().is_none());
+    // Verify it can be used as &dyn Error
+    let _: &dyn Error = &err;
 }

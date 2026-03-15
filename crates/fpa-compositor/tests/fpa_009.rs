@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use fpa_bus::InProcessBus;
-use fpa_compositor::compositor::Compositor;
+use fpa_compositor::compositor::{Compositor, LifecycleOp};
 use fpa_compositor::state_machine::ExecutionState;
 use fpa_contract::test_support::Counter;
 use fpa_contract::StateContribution;
@@ -153,4 +153,43 @@ fn tick_count_increments() {
 
     compositor.run_tick(1.0).unwrap();
     assert_eq!(compositor.tick_count(), 2);
+}
+
+// --- Despawn lifecycle tests ---
+
+/// Despawn removes a partition from the compositor.
+#[test]
+fn despawn_removes_partition() {
+    let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(Counter::new("a")),
+        Box::new(Counter::new("b")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    compositor.init().unwrap();
+    compositor.run_tick(1.0).unwrap();
+
+    compositor.request_lifecycle_op(LifecycleOp::Despawn("a".to_string()));
+    compositor.run_tick(1.0).unwrap();
+
+    let snapshot = compositor.dump().unwrap();
+    let partitions_table = snapshot.get("partitions").unwrap().as_table().unwrap();
+    assert!(!partitions_table.contains_key("a"), "partition 'a' should have been despawned");
+    assert!(partitions_table.contains_key("b"), "partition 'b' should still exist");
+}
+
+/// Despawn of a nonexistent partition ID is silently ignored.
+#[test]
+fn despawn_nonexistent_is_silent() {
+    let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(Counter::new("a")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    compositor.init().unwrap();
+    compositor.request_lifecycle_op(LifecycleOp::Despawn("nonexistent".to_string()));
+    let result = compositor.run_tick(1.0);
+    assert!(result.is_ok(), "despawning nonexistent partition should not error");
 }

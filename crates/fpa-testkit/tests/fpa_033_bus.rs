@@ -397,6 +397,88 @@ fn bus_communication_order_independent_across_all_permutations() {
     }
 }
 
+// --- load_state error paths for bus-aware test partitions ---
+
+/// Sensor load_state rejects table missing required "scale" field.
+#[test]
+fn sensor_load_state_rejects_missing_field() {
+    let bus = Arc::new(InProcessBus::new("test"));
+    let mut sensor = Sensor::new("s", bus, 1.0, 0.0);
+    let mut table = toml::map::Map::new();
+    // Missing "scale" — only provide offset, step_count, history
+    table.insert("offset".to_string(), toml::Value::Float(0.0));
+    table.insert("step_count".to_string(), toml::Value::Integer(1));
+    table.insert("history".to_string(), toml::Value::Array(vec![]));
+    let result = sensor.load_state(toml::Value::Table(table));
+    assert!(result.is_err(), "should reject missing 'scale' field");
+}
+
+/// Sensor load_state rejects negative step_count.
+#[test]
+fn sensor_load_state_rejects_negative_step_count() {
+    let bus = Arc::new(InProcessBus::new("test"));
+    let mut sensor = Sensor::new("s", bus, 1.0, 0.0);
+    let mut table = toml::map::Map::new();
+    table.insert("scale".to_string(), toml::Value::Float(1.0));
+    table.insert("offset".to_string(), toml::Value::Float(0.0));
+    table.insert("step_count".to_string(), toml::Value::Integer(-1));
+    table.insert("history".to_string(), toml::Value::Array(vec![]));
+    let result = sensor.load_state(toml::Value::Table(table));
+    assert!(result.is_err(), "should reject negative step_count");
+}
+
+/// Follower load_state rejects table missing required "last_reading" field.
+#[test]
+fn follower_load_state_rejects_missing_field() {
+    let bus = Arc::new(InProcessBus::new("test"));
+    let mut follower = Follower::new("f", bus, 5.0);
+    let mut table = toml::map::Map::new();
+    // Missing "last_reading"
+    table.insert("commands_sent".to_string(), toml::Value::Integer(0));
+    table.insert("threshold".to_string(), toml::Value::Float(5.0));
+    let result = follower.load_state(toml::Value::Table(table));
+    assert!(result.is_err(), "should reject missing 'last_reading' field");
+}
+
+/// Follower load_state rejects negative commands_sent.
+#[test]
+fn follower_load_state_rejects_negative_commands_sent() {
+    let bus = Arc::new(InProcessBus::new("test"));
+    let mut follower = Follower::new("f", bus, 5.0);
+    let mut table = toml::map::Map::new();
+    table.insert("last_reading".to_string(), toml::Value::Float(1.0));
+    table.insert("commands_sent".to_string(), toml::Value::Integer(-1));
+    table.insert("threshold".to_string(), toml::Value::Float(5.0));
+    let result = follower.load_state(toml::Value::Table(table));
+    assert!(result.is_err(), "should reject negative commands_sent");
+}
+
+/// Recorder load_state rejects table missing required "entries_logged" field.
+#[test]
+fn recorder_load_state_rejects_missing_field() {
+    let bus = Arc::new(InProcessBus::new("test"));
+    let mut recorder = Recorder::new("r", bus);
+    let mut table = toml::map::Map::new();
+    // Missing "entries_logged"
+    table.insert("commands_received".to_string(), toml::Value::Integer(0));
+    table.insert("last_tick_seen".to_string(), toml::Value::Integer(0));
+    let result = recorder.load_state(toml::Value::Table(table));
+    assert!(result.is_err(), "should reject missing 'entries_logged' field");
+}
+
+/// Recorder load_state rejects negative entries_logged.
+#[test]
+fn recorder_load_state_rejects_negative_values() {
+    let bus = Arc::new(InProcessBus::new("test"));
+    let mut recorder = Recorder::new("r", bus);
+    let mut table = toml::map::Map::new();
+    table.insert("entries_logged".to_string(), toml::Value::Integer(-1));
+    table.insert("commands_received".to_string(), toml::Value::Integer(0));
+    table.insert("last_tick_seen".to_string(), toml::Value::Integer(0));
+    let result = recorder.load_state(toml::Value::Table(table));
+    assert!(result.is_err(), "should reject negative entries_logged");
+}
+
 /// Config-driven composition via composition function (FPA-019).
 ///
 /// With DeferredBus, partition IDs no longer need prefixes to control

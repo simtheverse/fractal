@@ -63,3 +63,44 @@ fn partitions_have_identity() {
     assert_eq!(counter.id(), "my_counter");
     assert_eq!(accum.id(), "my_accum");
 }
+
+// --- PartitionError coverage ---
+
+/// PartitionError Display without layer_depth includes partition_id, operation, and message.
+#[test]
+fn partition_error_display_without_layer_depth() {
+    let err = PartitionError::new("p1", "step", "broken");
+    let display = err.to_string();
+    assert!(display.contains("p1"), "should contain partition id: {}", display);
+    assert!(display.contains("step"), "should contain operation: {}", display);
+    assert!(display.contains("broken"), "should contain message: {}", display);
+    assert!(!display.contains("layer"), "should not contain layer info: {}", display);
+}
+
+/// PartitionError Display with layer_depth includes "layer N".
+#[test]
+fn partition_error_display_with_layer_depth() {
+    let err = PartitionError::new("p1", "step", "broken").with_layer_depth(3);
+    let display = err.to_string();
+    assert!(display.contains("layer 3"), "should contain layer depth: {}", display);
+    assert!(display.contains("p1"), "should contain partition id: {}", display);
+}
+
+/// PartitionError with_source sets the error source.
+#[test]
+fn partition_error_with_source() {
+    use std::error::Error;
+    let source = std::io::Error::other("underlying");
+    let err = PartitionError::new("p1", "step", "broken").with_source(source);
+    assert!(err.source().is_some(), "source should be Some");
+    let src = err.source().unwrap();
+    assert!(src.to_string().contains("underlying"));
+}
+
+/// PartitionError source is None by default.
+#[test]
+fn partition_error_source_is_none_by_default() {
+    use std::error::Error;
+    let err = PartitionError::new("p1", "step", "broken");
+    assert!(err.source().is_none(), "source should be None by default");
+}

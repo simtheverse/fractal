@@ -99,3 +99,49 @@ fn id_non_empty_accumulator() {
 fn id_non_empty_doubler() {
     contract_test_id_non_empty(Doubler::new("d"));
 }
+
+// --- load_state error paths ---
+
+/// Generic: load_state rejects non-table input.
+fn contract_test_load_rejects_non_table<P: Partition>(mut partition: P) {
+    partition.init().unwrap();
+    let result = partition.load_state(toml::Value::Integer(42));
+    assert!(result.is_err(), "load_state with non-table should fail");
+}
+
+#[test]
+fn load_rejects_non_table_counter() {
+    contract_test_load_rejects_non_table(Counter::new("c"));
+}
+
+#[test]
+fn load_rejects_non_table_accumulator() {
+    contract_test_load_rejects_non_table(Accumulator::new("a"));
+}
+
+#[test]
+fn load_rejects_non_table_doubler() {
+    contract_test_load_rejects_non_table(Doubler::new("d"));
+}
+
+/// Generic: load_state rejects empty table (missing required fields).
+fn contract_test_load_rejects_empty_table<P: Partition>(mut partition: P) {
+    partition.init().unwrap();
+    let result = partition.load_state(toml::Value::Table(toml::map::Map::new()));
+    assert!(result.is_err(), "load_state with empty table should fail");
+}
+
+#[test]
+fn load_rejects_empty_table_counter() {
+    contract_test_load_rejects_empty_table(Counter::new("c"));
+}
+
+#[test]
+fn load_rejects_empty_table_accumulator() {
+    contract_test_load_rejects_empty_table(Accumulator::new("a"));
+}
+
+#[test]
+fn load_rejects_empty_table_doubler() {
+    contract_test_load_rejects_empty_table(Doubler::new("d"));
+}

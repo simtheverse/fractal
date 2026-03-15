@@ -1,6 +1,6 @@
 //! Tests for FPA-006: Shared State Machine.
 
-use fpa_compositor::state_machine::{ExecutionState, StateMachine, TransitionRequest};
+use fpa_compositor::state_machine::{ExecutionState, StateMachine, TransitionError, TransitionRequest};
 
 /// State machine starts in Uninitialized.
 #[test]
@@ -144,6 +144,37 @@ fn running_can_pause_and_resume() {
     })
     .unwrap();
     assert_eq!(sm.state(), ExecutionState::Running);
+}
+
+/// TransitionError Display format contains from/to states and reason.
+#[test]
+fn transition_error_display_format() {
+    let sm = StateMachine::new();
+    let err = sm.request_transition(TransitionRequest {
+        requested_by: "test".to_string(),
+        target_state: ExecutionState::Running,
+    }).unwrap_err();
+    let display = err.to_string();
+    assert!(
+        display.contains("invalid transition from"),
+        "should contain 'invalid transition from': {}",
+        display
+    );
+    assert!(display.contains("Uninitialized"), "should contain source state: {}", display);
+    assert!(display.contains("Running"), "should contain target state: {}", display);
+}
+
+/// TransitionError implements std::error::Error.
+#[test]
+fn transition_error_implements_std_error() {
+    use std::error::Error;
+    let err = TransitionError {
+        from: ExecutionState::Uninitialized,
+        to: ExecutionState::Running,
+        reason: "test".to_string(),
+    };
+    assert!(err.source().is_none());
+    let _: &dyn Error = &err;
 }
 
 /// Error state can transition to ShuttingDown for recovery.

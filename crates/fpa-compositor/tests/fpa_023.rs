@@ -212,3 +212,105 @@ fn round_trip_with_continued_execution() {
     assert_eq!(comp_a2.tick_count(), n + m);
     assert_eq!(comp_b.tick_count(), n + m);
 }
+
+// --- Load validation edge cases ---
+
+/// Load rejects partition state that is not a valid StateContribution envelope.
+#[test]
+fn load_rejects_invalid_state_contribution_envelope() {
+    let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(Counter::new("counter")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    compositor.init().unwrap();
+    compositor.pause().unwrap();
+
+    // Partition entry is a bare table without state/fresh/age_ms fields
+    let state: toml::Value = toml::from_str(
+        r#"
+        [system]
+        tick_count = 5
+
+        [partitions.counter]
+        count = 7
+        "#,
+    )
+    .unwrap();
+
+    let result = compositor.load(state);
+    assert!(result.is_err(), "load should reject bare table without StateContribution envelope");
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("StateContribution") || err.message.contains("envelope"),
+        "error should mention StateContribution: {}",
+        err.message
+    );
+}
+
+/// Load rejects negative tick_count.
+#[test]
+fn load_rejects_negative_tick_count() {
+    let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(Counter::new("counter")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    compositor.init().unwrap();
+    compositor.pause().unwrap();
+
+    let state: toml::Value = toml::from_str(
+        r#"
+        [system]
+        tick_count = -5
+
+        [partitions.counter]
+        fresh = true
+        age_ms = 0
+        [partitions.counter.state]
+        count = 7
+        "#,
+    )
+    .unwrap();
+
+    let result = compositor.load(state);
+    assert!(result.is_err(), "load should reject negative tick_count");
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("negative") || err.message.contains("tick_count"),
+        "error should mention negative tick_count: {}",
+        err.message
+    );
+}
+
+/// Load from Uninitialized state succeeds.
+#[test]
+fn load_from_uninitialized_succeeds() {
+    let partitions: Vec<Box<dyn fpa_contract::Partition>> = vec![
+        Box::new(Counter::new("counter")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    assert_eq!(compositor.state(), fpa_compositor::state_machine::ExecutionState::Uninitialized);
+
+    let state: toml::Value = toml::from_str(
+        r#"
+        [system]
+        tick_count = 3
+
+        [partitions.counter]
+        fresh = true
+        age_ms = 0
+        [partitions.counter.state]
+        count = 3
+        "#,
+    )
+    .unwrap();
+
+    let result = compositor.load(state);
+    assert!(result.is_ok(), "load from Uninitialized should succeed: {:?}", result.err());
+    assert_eq!(compositor.tick_count(), 3);
+}
