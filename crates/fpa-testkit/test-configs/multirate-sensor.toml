@@ -1,20 +1,22 @@
 # Multi-rate bus communication: Sensor + Follower + Counter
 # Rate configuration is applied programmatically via set_rate_config();
-# this fragment defines the partition topology. When fast_sensor is set
-# to rate 4, Follower at rate 1 sees only the last reading per outer
+# this fragment defines the partition topology. When a_fast_sensor is set
+# to rate 4, b_follower at rate 1 sees only the last reading per outer
 # tick (LatestValue semantic).
+#
+# Partition IDs prefixed to control BTreeMap stepping order.
 
 [system]
 timestep = 1.0
 
-[partitions.fast_sensor]
+[partitions.a_fast_sensor]
 implementation = "Sensor"
 scale = 1.0
 offset = 0.0
 
-[partitions.follower]
+[partitions.b_follower]
 implementation = "Follower"
 threshold = 3.0
 
-[partitions.counter]
+[partitions.c_counter]
 implementation = "Counter"

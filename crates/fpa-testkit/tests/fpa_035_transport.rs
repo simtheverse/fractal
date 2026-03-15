@@ -17,6 +17,8 @@ use fpa_contract::{Partition, StateContribution};
 use fpa_testkit::test_partitions::{Follower, Recorder, Sensor};
 
 /// Build and run a sensor-follower-recorder composition with the given bus.
+/// Uses explicit vector ordering (Sensor → Follower → Recorder) so that
+/// direct bus messages flow within each tick.
 fn run_pipeline(bus: Arc<dyn Bus>, ticks: u64) -> toml::Value {
     let partitions: Vec<Box<dyn Partition>> = vec![
         Box::new(Sensor::new("sensor", bus.clone(), 1.5, 0.0)),
@@ -69,8 +71,8 @@ fn same_result_all_three_transports() {
     assert_eq!(state_async, state_net);
 }
 
-/// Compositional property: queued command count is conserved across transports.
-/// This asserts the property (FPA-037) rather than exact values.
+/// Compositional property: queued command count is conserved across transports
+/// and matches the expected count (FPA-037).
 #[test]
 fn command_conservation_across_transports() {
     for (label, bus) in [
@@ -91,6 +93,11 @@ fn command_conservation_across_transports() {
             .as_integer()
             .unwrap();
 
+        // Sensor-first ordering: ticks 4-10 at/above threshold → 7 commands
+        assert_eq!(
+            commands_sent, 7,
+            "{}: follower should send 7 commands", label
+        );
         assert_eq!(
             commands_sent, commands_received,
             "{}: queued command count should be conserved (sent={}, received={})",

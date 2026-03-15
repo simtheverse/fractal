@@ -164,7 +164,7 @@ impl Partition for Sensor {
 }
 
 /// Subscribes to SensorReading (LatestValue), publishes TestCommand (Queued)
-/// when sensor value crosses a configurable threshold.
+/// each tick the sensor value is at or above a configurable threshold.
 ///
 /// The core "read input, produce output" pattern from the reference domains.
 ///
@@ -227,7 +227,7 @@ impl Partition for Follower {
         if let Some(reading) = self.sensor_reader.read() {
             self.last_reading = reading.value;
 
-            // Publish a command when threshold is crossed.
+            // Publish a command each tick the value is at or above threshold.
             if reading.value >= self.threshold {
                 self.commands_sent += 1;
                 self.bus.publish(TestCommand {

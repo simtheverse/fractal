@@ -1,18 +1,23 @@
 # Inter-partition communication: Sensor → Follower → Recorder
 # Exercises bus publish/subscribe, LatestValue + Queued delivery,
 # config-driven construction, and complex state.
+#
+# Partition IDs are prefixed to control BTreeMap iteration order,
+# which determines stepping order within a tick. Sensor must step
+# before Follower so that Follower sees the current-tick reading
+# (direct bus messages are visible within the same tick).
 
 [system]
 timestep = 1.0
 
-[partitions.sensor]
+[partitions.a_sensor]
 implementation = "Sensor"
 scale = 1.5
 offset = 0.0
 
-[partitions.follower]
+[partitions.b_follower]
 implementation = "Follower"
 threshold = 5.0
 
-[partitions.recorder]
+[partitions.c_recorder]
 implementation = "Recorder"
