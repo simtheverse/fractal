@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fpa_bus::{Bus, BusExt, BusReader, InProcessBus, TypedReader};
+use fpa_bus::{Bus, BusExt, BusReader, DeferredBus, InProcessBus, TypedReader};
 use fpa_contract::{DumpRequest, LoadRequest, Partition, PartitionError, StateContribution};
 use fpa_events::EventEngine;
 
@@ -53,7 +53,7 @@ pub struct Compositor {
     /// Unique identifier for this compositor instance.
     id: String,
     partitions: Vec<Box<dyn Partition>>,
-    bus: Arc<dyn Bus>,
+    bus: Arc<DeferredBus>,
     state_machine: StateMachine,
     double_buffer: DoubleBuffer,
     /// Fallback partitions keyed by the ID of the partition they replace.
@@ -100,9 +100,21 @@ impl Compositor {
     ///
     /// Accepts any `Bus` implementation via `Arc<dyn Bus>`, enabling runtime
     /// transport selection (FPA-004) and shared ownership so partitions can
-    /// hold bus references at construction time.
+    /// hold bus references at construction time. The bus is wrapped in a
+    /// `DeferredBus` internally to enforce intra-tick message isolation
+    /// (FPA-014). For tests where partitions need to hold the same
+    /// `DeferredBus`, use `from_deferred_bus`.
     /// For convenience with `InProcessBus`, use `Compositor::new_default`.
     pub fn new(partitions: Vec<Box<dyn Partition>>, bus: Arc<dyn Bus>) -> Self {
+        Self::from_deferred_bus(partitions, Arc::new(DeferredBus::new(bus)))
+    }
+
+    /// Create a new compositor with a pre-constructed `DeferredBus`.
+    ///
+    /// Use this when partitions need to hold the same `DeferredBus` instance
+    /// (e.g., when created via `compose()` or in tests where partitions
+    /// publish bus messages during `step()`).
+    pub fn from_deferred_bus(partitions: Vec<Box<dyn Partition>>, bus: Arc<DeferredBus>) -> Self {
         let transition_reader = bus.subscribe::<TransitionRequest>();
         let dump_reader = bus.subscribe::<DumpRequest>();
         let load_reader = bus.subscribe::<LoadRequest>();
@@ -333,8 +345,8 @@ impl Compositor {
         &*self.bus
     }
 
-    /// Get a shared reference to the bus (for partition injection).
-    pub fn bus_arc(&self) -> &Arc<dyn Bus> {
+    /// Get a shared reference to the deferred bus.
+    pub fn bus_arc(&self) -> &Arc<DeferredBus> {
         &self.bus
     }
 
@@ -448,6 +460,12 @@ impl Compositor {
         self.double_buffer.swap();
 
         // === Phase 2: Partition stepping (FPA-014) ===
+        // Enable deferred mode so bus messages published during step() are
+        // queued rather than immediately delivered. This ensures no partition
+        // sees another partition's current-tick bus messages — the same
+        // isolation guarantee the double buffer provides for SharedContext.
+        self.bus.set_deferred(true);
+
         // For multi-rate partitions, each partition steps `rate` times per outer
         // tick with `dt / rate` per sub-step. If a partition faults mid-cycle and
         // a fallback is registered, the fallback completes the remaining sub-steps.
@@ -506,10 +524,18 @@ impl Compositor {
             i += 1;
         }
 
+        // End deferred mode and flush queued bus messages to the inner bus.
+        // Messages are now available to subscribers but won't be read until
+        // the next tick's Phase 2 step calls (one-tick delay, matching
+        // SharedContext semantics).
+        self.bus.set_deferred(false);
+        self.bus.flush();
+
         // Assemble shared context from current tick's partition outputs
         // and publish on the bus (FPA-014: after the tick barrier, before
         // Phase 3). SharedContext reflects the complete, consistent state
-        // of all partitions after stepping.
+        // of all partitions after stepping. Published with deferred mode
+        // off, so it goes directly to the inner bus.
         {
             let mut table = toml::map::Map::new();
             for (id, value) in self.double_buffer.write_all() {

@@ -2,22 +2,21 @@
 # Exercises bus publish/subscribe, LatestValue + Queued delivery,
 # config-driven construction, and complex state.
 #
-# Partition IDs are prefixed to control BTreeMap iteration order,
-# which determines stepping order within a tick. Sensor must step
-# before Follower so that Follower sees the current-tick reading
-# (direct bus messages are visible within the same tick).
+# DeferredBus ensures bus messages published during step() are not
+# visible until the next tick, so partition stepping order does not
+# affect results (FPA-014 intra-tick isolation).
 
 [system]
 timestep = 1.0
 
-[partitions.a_sensor]
+[partitions.sensor]
 implementation = "Sensor"
 scale = 1.5
 offset = 0.0
 
-[partitions.b_follower]
+[partitions.follower]
 implementation = "Follower"
 threshold = 5.0
 
-[partitions.c_recorder]
+[partitions.recorder]
 implementation = "Recorder"

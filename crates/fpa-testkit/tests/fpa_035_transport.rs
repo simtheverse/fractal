@@ -2,14 +2,15 @@
 //
 // Verifies that the same composition with bus-communicating partitions
 // produces identical final state under all three transport modes
-// (InProcess, Async, Network). This extends FPA-004's transport
-// equivalence guarantee to partitions that actively use the bus.
+// (InProcess, Async, Network). DeferredBus wraps each transport,
+// ensuring intra-tick isolation (FPA-014) regardless of transport.
 //
-// Traces to: FPA-004 (transport abstraction), FPA-035 (parameterized tests).
+// Traces to: FPA-004 (transport abstraction), FPA-014 (intra-tick
+// isolation), FPA-035 (parameterized tests).
 
 use std::sync::Arc;
 
-use fpa_bus::{AsyncBus, Bus, InProcessBus, NetworkBus};
+use fpa_bus::{AsyncBus, Bus, DeferredBus, InProcessBus, NetworkBus};
 use fpa_compositor::compositor::Compositor;
 use fpa_contract::test_support::{SensorReading, TestCommand};
 use fpa_contract::{Partition, StateContribution};
@@ -17,15 +18,16 @@ use fpa_contract::{Partition, StateContribution};
 use fpa_testkit::test_partitions::{Follower, Recorder, Sensor};
 
 /// Build and run a sensor-follower-recorder composition with the given bus.
-/// Uses explicit vector ordering (Sensor → Follower → Recorder) so that
-/// direct bus messages flow within each tick.
+/// Wraps the bus in DeferredBus for intra-tick isolation (FPA-014).
 fn run_pipeline(bus: Arc<dyn Bus>, ticks: u64) -> toml::Value {
+    let deferred = Arc::new(DeferredBus::new(bus));
+    let layer_bus: Arc<dyn Bus> = deferred.clone();
     let partitions: Vec<Box<dyn Partition>> = vec![
-        Box::new(Sensor::new("sensor", bus.clone(), 1.5, 0.0)),
-        Box::new(Follower::new("follower", bus.clone(), 5.0)),
-        Box::new(Recorder::new("recorder", bus.clone())),
+        Box::new(Sensor::new("sensor", layer_bus.clone(), 1.5, 0.0)),
+        Box::new(Follower::new("follower", layer_bus.clone(), 5.0)),
+        Box::new(Recorder::new("recorder", layer_bus.clone())),
     ];
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::from_deferred_bus(partitions, deferred);
 
     compositor.init().unwrap();
     for _ in 0..ticks {
@@ -73,6 +75,10 @@ fn same_result_all_three_transports() {
 
 /// Compositional property: queued command count is conserved across transports
 /// and matches the expected count (FPA-037).
+///
+/// Under deferred delivery (scale=1.5, threshold=5.0, 10 ticks):
+/// Follower sends 6 commands (ticks 5-10, reading previous-tick values).
+/// Recorder receives 5 (tick 10's command not consumed within the run).
 #[test]
 fn command_conservation_across_transports() {
     for (label, bus) in [
@@ -93,15 +99,14 @@ fn command_conservation_across_transports() {
             .as_integer()
             .unwrap();
 
-        // Sensor-first ordering: ticks 4-10 at/above threshold → 7 commands
+        // Deferred delivery: 6 commands sent, 5 received (1 in-flight)
         assert_eq!(
-            commands_sent, 7,
-            "{}: follower should send 7 commands", label
+            commands_sent, 6,
+            "{}: follower should send 6 commands (deferred delivery)", label
         );
         assert_eq!(
-            commands_sent, commands_received,
-            "{}: queued command count should be conserved (sent={}, received={})",
-            label, commands_sent, commands_received
+            commands_received, 5,
+            "{}: recorder should receive 5 commands (1 in-flight at end)", label
         );
     }
 }

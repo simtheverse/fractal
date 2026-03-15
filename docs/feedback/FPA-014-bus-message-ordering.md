@@ -1,71 +1,66 @@
-# FPA-014 Finding: Bus Messages Are Not Isolated by the Double Buffer
+# FPA-014 Resolution: Bus Message Isolation via DeferredBus
 
-## Finding
+## Original Finding
 
 FPA-014 guarantees intra-tick isolation: "no partition sees another partition's
-current-tick output." The double buffer enforces this for SharedContext —
-partition A's `contribute_state()` output from tick N is only visible to
-partition B during tick N+1, regardless of stepping order.
+current-tick output." The double buffer enforced this for SharedContext, but
+direct bus messages published during `step()` were immediately visible to
+partitions stepped later in the same tick. This created a stepping-order
+dependence that violated FPA-014's guarantee.
 
-However, direct bus messages published during `step()` bypass the double buffer
-entirely. When Sensor publishes a SensorReading on the bus during its step,
-Follower can read it immediately if Follower steps later in the same tick.
-This creates a **stepping-order dependence** for direct bus communication:
+With scale=1.5, threshold=5.0, and 10 ticks, Sensor-first produced 7 commands
+while Follower-first produced 6 — demonstrating that partition order changed
+observable behavior.
 
-- **Sensor-first order:** Follower sees current-tick reading → reacts immediately
-- **Follower-first order:** Follower sees previous-tick reading → one-tick delay
+## Resolution: DeferredBus
 
-With scale=1.5, threshold=5.0, and 10 ticks, Sensor-first produces 7 commands
-while Follower-first produces 6. The double buffer's order-independence guarantee
-does not extend to direct bus messages.
+`DeferredBus` is a Bus wrapper that queues messages published during Phase 2
+(partition stepping) and flushes them after the tick barrier. This gives bus
+messages the same one-tick-delay as SharedContext via the double buffer.
 
-## Why This Matters
+### How it works
 
-All four reference domain applications require intra-tick bus communication:
-- Industrial controller: SafetyInterlock must react to current-tick SensorReadings
-- Kiosk: OrderBuilder must see current-tick MenuSelections
-- Flight sim: ControlLaw must read current-tick AircraftState
-- Document editor: Renderer must see current-tick DocumentState
+1. Before Phase 2, the compositor sets `deferred(true)` on the bus
+2. All `publish_erased` calls during stepping queue messages instead of
+   delivering them
+3. After all partitions have stepped and contributed state, the compositor
+   sets `deferred(false)` and calls `flush()`
+4. Queued messages are delivered to the inner bus in publish order
+5. SharedContext is published after flush (non-deferred, direct delivery)
 
-These patterns are correct and necessary. The question is whether FPA-014's
-isolation guarantee should be understood as applying only to SharedContext
-(the compositor's state observation mechanism) or to all inter-partition
-communication including direct bus messages.
+### Result
 
-## Analysis
+Both stepping orders now produce **6 commands** — Follower always reads the
+previous tick's SensorReading regardless of whether it steps before or after
+Sensor. FPA-014's isolation guarantee now holds for all inter-partition
+communication, not just SharedContext.
 
-The double buffer solves the problem it was designed for: making `contribute_state()`
-output available as a consistent snapshot. Direct bus messages serve a different
-purpose — they are real-time communication within a tick, not historical state
-observation. The reference domains treat these as distinct channels:
+## Impact on Reference Domains
 
-1. **SharedContext** (via double buffer): "what was everyone's state last tick?"
-2. **Direct bus messages** (real-time): "what is happening right now?"
+All four reference domains benefit from this change:
 
-Isolating direct bus messages would require queuing all messages published during
-Phase 2 and delivering them only in Phase 3 or the next tick. This would break
-every reference domain's communication pattern and add latency where the domains
-require immediacy.
+- **Industrial controller:** SafetyInterlock reads previous-tick SensorReadings.
+  The one-tick delay is acceptable because the compositor's tick rate is the
+  system's reaction-time guarantee — if the tick is fast enough for safety,
+  one-tick-delayed bus messages are too.
+- **Kiosk:** OrderBuilder reads previous-tick MenuSelections. UI responsiveness
+  is bounded by tick rate, not intra-tick ordering.
+- **Flight sim:** ControlLaw reads previous-tick AircraftState. Flight dynamics
+  simulations already operate on discrete timesteps; one-tick delay matches
+  the simulation model.
+- **Document editor:** Renderer reads previous-tick DocumentState. Rendering
+  is inherently one step behind editing in any frame-based system.
 
-## Recommendation
+## Spec Implication
 
-Clarify FPA-014 to distinguish two communication channels:
+FPA-014's intra-tick isolation now applies uniformly to both communication
+channels:
 
-1. **State observation** (SharedContext, double buffer): order-independent, one-tick
-   delay guaranteed. No partition sees another's current-tick `contribute_state()`.
+1. **State observation** (SharedContext, double buffer): one-tick delay, as before
+2. **Direct bus messages** (publish/subscribe during `step()`): one-tick delay
+   via DeferredBus — messages published in tick N are readable in tick N+1
 
-2. **Direct bus messages** (publish/subscribe during `step()`): order-dependent,
-   same-tick delivery to partitions stepped later. Stepping order is deterministic
-   (BTreeMap by ID for composed systems, vector order for direct construction).
-
-The deterministic stepping order means results are reproducible — the same
-configuration always produces the same behavior. The order dependence is not
-nondeterminism; it is a consequence of sequential execution that operators control
-through partition naming.
-
-This distinction should be explicit in FPA-014 rather than left implicit.
-
-## Evidence
-
-See `fpa_033_bus::stepping_order_affects_bus_communication` which demonstrates
-the behavioral difference between the two orderings.
+The previous recommendation to distinguish "real-time" vs "historical" channels
+is superseded. All inter-partition communication has uniform one-tick-delay
+semantics, which is simpler, more predictable, and satisfies the spec's
+order-independence requirement.

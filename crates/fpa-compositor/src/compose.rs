@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fpa_bus::Bus;
+use fpa_bus::{Bus, DeferredBus};
 use fpa_config::{CompositionFragment, EventConfig};
 use fpa_contract::{Partition, PartitionError};
 use fpa_events::{EventDefinition, EventEngine};
@@ -140,6 +140,8 @@ pub fn compose(
     registry: &PartitionRegistry,
     bus: Arc<dyn Bus>,
 ) -> Result<Compositor, ComposeError> {
+    let deferred_bus = Arc::new(DeferredBus::new(bus));
+    let layer_bus: Arc<dyn Bus> = deferred_bus.clone();
     let mut partitions: Vec<Box<dyn Partition>> = Vec::new();
 
     for (id, config) in &fragment.partitions {
@@ -158,12 +160,12 @@ pub fn compose(
         })?;
 
         let partition = registry
-            .create(impl_name, id, &config_value, &bus)
+            .create(impl_name, id, &config_value, &layer_bus)
             .map_err(ComposeError::Partition)?;
         partitions.push(partition);
     }
 
-    let mut compositor = Compositor::new(partitions, bus);
+    let mut compositor = Compositor::from_deferred_bus(partitions, deferred_bus);
 
     // Wire system-level events from the fragment.
     let event_defs = convert_events(&fragment.events)?;
