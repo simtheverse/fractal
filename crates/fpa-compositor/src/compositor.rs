@@ -69,6 +69,8 @@ pub struct Compositor {
     layer_depth: u32,
     /// Multi-rate scheduling configuration.
     rate_config: RateConfig,
+    /// Fault handling timeout configuration (FPA-011).
+    timeout_config: fault::TimeoutConfig,
     /// Relay policy for inter-layer transition request forwarding (FPA-010).
     relay_policy: RelayPolicy,
     /// Transition requests collected from inner partitions during the current tick.
@@ -117,6 +119,7 @@ impl Compositor {
             last_triggered_actions: Vec::new(),
             layer_depth: 0,
             rate_config: RateConfig::new(),
+            timeout_config: fault::TimeoutConfig::default(),
             relay_policy: RelayPolicy::Forward,
             pending_requests: Vec::new(),
             direct_signal_registry: DirectSignalRegistry::new(),
@@ -170,6 +173,19 @@ impl Compositor {
     /// per outer tick with proportionally smaller dt.
     pub fn set_rate_config(&mut self, config: RateConfig) {
         self.rate_config = config;
+    }
+
+    /// Set the fault handling timeout configuration (FPA-011).
+    ///
+    /// Each domain sets timeouts appropriate to its timing constraints.
+    /// Defaults: 50ms for step/contribute_state, 500ms for init/shutdown/load.
+    pub fn set_timeout_config(&mut self, config: fault::TimeoutConfig) {
+        self.timeout_config = config;
+    }
+
+    /// Get the current timeout configuration.
+    pub fn timeout_config(&self) -> &fault::TimeoutConfig {
+        &self.timeout_config
     }
 
     /// Set the relay policy for this compositor (FPA-010).
@@ -342,7 +358,7 @@ impl Compositor {
 
         // Initialize all partitions with fault handling
         for partition in &mut self.partitions {
-            let result = fault::safe_init(partition.as_mut());
+            let result = fault::safe_init(partition.as_mut(), &self.timeout_config);
             if let Err(e) = result.into_result() {
                 self.state_machine.force_state(ExecutionState::Error);
                 return Err(e.with_layer_depth(self.layer_depth));
@@ -351,7 +367,7 @@ impl Compositor {
 
         // Initialize fallbacks too
         for fallback in self.fallbacks.values_mut() {
-            let result = fault::safe_init(fallback.as_mut());
+            let result = fault::safe_init(fallback.as_mut(), &self.timeout_config);
             if let Err(e) = result.into_result() {
                 self.state_machine.force_state(ExecutionState::Error);
                 return Err(e.with_layer_depth(self.layer_depth));
@@ -442,13 +458,13 @@ impl Compositor {
             let sub_dt = dt / rate as f64;
 
             for sub in 0..rate {
-                let step_result = fault::safe_step(self.partitions[i].as_mut(), sub_dt);
+                let step_result = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
 
                 if let Err(step_err) = step_result.into_result() {
                     // Check for fallback
                     if let Some(mut fallback) = self.fallbacks.remove(&partition_id) {
                         // Step the fallback for the failed sub-step
-                        let fallback_result = fault::safe_step(fallback.as_mut(), sub_dt);
+                        let fallback_result = fault::safe_step(fallback.as_mut(), sub_dt, &self.timeout_config);
                         if let Err(fallback_err) = fallback_result.into_result() {
                             self.state_machine.force_state(ExecutionState::Error);
                             return Err(fallback_err.with_layer_depth(self.layer_depth));
@@ -459,7 +475,7 @@ impl Compositor {
 
                         // Complete remaining sub-steps with the fallback
                         for _remaining in (sub + 1)..rate {
-                            let r = fault::safe_step(self.partitions[i].as_mut(), sub_dt);
+                            let r = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
                             if let Err(e) = r.into_result() {
                                 self.state_machine.force_state(ExecutionState::Error);
                                 return Err(e.with_layer_depth(self.layer_depth));
@@ -475,7 +491,7 @@ impl Compositor {
             }
 
             // Collect output after all sub-steps (including fallback's remaining steps)
-            let state = fault::safe_contribute_state(self.partitions[i].as_ref())
+            let state = fault::safe_contribute_state(self.partitions[i].as_ref(), &self.timeout_config)
                 .map_err(|e| e.with_layer_depth(self.layer_depth))?;
             let envelope = StateContribution {
                 state,
@@ -549,7 +565,7 @@ impl Compositor {
         // Shut down all partitions
         let mut last_error = None;
         for partition in &mut self.partitions {
-            let result = fault::safe_shutdown(partition.as_mut());
+            let result = fault::safe_shutdown(partition.as_mut(), &self.timeout_config);
             if let Err(e) = result.into_result() {
                 last_error = Some(e.with_layer_depth(self.layer_depth));
             }
@@ -635,7 +651,7 @@ impl Compositor {
         for op in ops {
             match op {
                 LifecycleOp::Spawn(mut partition) => {
-                    let result = fault::safe_init(partition.as_mut());
+                    let result = fault::safe_init(partition.as_mut(), &self.timeout_config);
                     if let Err(e) = result.into_result() {
                         self.state_machine.force_state(ExecutionState::Error);
                         return Err(e.with_layer_depth(self.layer_depth));
@@ -650,7 +666,7 @@ impl Compositor {
                         // A failing shutdown should not prevent despawn or poison
                         // the compositor — the partition is already gone from the
                         // active set by this point.
-                        let _ = fault::safe_shutdown(removed.as_mut());
+                        let _ = fault::safe_shutdown(removed.as_mut(), &self.timeout_config);
                     }
                 }
             }
@@ -729,7 +745,7 @@ impl Compositor {
                             ),
                         ).with_layer_depth(self.layer_depth));
                     };
-                    fault::safe_load_state(partition.as_mut(), state)
+                    fault::safe_load_state(partition.as_mut(), state, &self.timeout_config)
                         .into_result()
                         .map_err(|e| e.with_layer_depth(self.layer_depth))?;
 
@@ -812,7 +828,7 @@ impl Compositor {
     pub fn dump(&self) -> Result<toml::Value, PartitionError> {
         let mut partitions = toml::map::Map::new();
         for partition in &self.partitions {
-            let state = fault::safe_contribute_state(partition.as_ref())
+            let state = fault::safe_contribute_state(partition.as_ref(), &self.timeout_config)
                 .map_err(|e| e.with_layer_depth(self.layer_depth))?;
             let envelope = StateContribution {
                 state,

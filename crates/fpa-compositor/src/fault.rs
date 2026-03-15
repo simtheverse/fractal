@@ -2,16 +2,45 @@
 //!
 //! Provides safe execution wrappers that catch errors and panics from
 //! partition trait calls, enforce timeouts, and produce enriched error context.
+//! Timeout durations are configurable per-compositor via `TimeoutConfig`.
 
 use fpa_contract::{Partition, PartitionError};
 use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
-/// Default timeout for step operations (50ms).
-pub const STEP_TIMEOUT: Duration = Duration::from_millis(50);
+/// Default timeout for step and contribute_state operations.
+pub const DEFAULT_STEP_TIMEOUT: Duration = Duration::from_millis(50);
 
-/// Default timeout for init operations (500ms).
-pub const INIT_TIMEOUT: Duration = Duration::from_millis(500);
+/// Default timeout for init, shutdown, and load_state operations.
+pub const DEFAULT_INIT_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Configurable timeout durations for partition operations.
+///
+/// Each domain sets timeouts appropriate to its timing constraints.
+/// A flight sim at 30 Hz has different budgets than an industrial
+/// controller at 100 Hz. Defaults match the spec's reference values.
+#[derive(Debug, Clone)]
+pub struct TimeoutConfig {
+    /// Timeout for step() and contribute_state() calls.
+    pub step: Duration,
+    /// Timeout for init(), shutdown(), and load_state() calls.
+    pub lifecycle: Duration,
+}
+
+impl TimeoutConfig {
+    pub fn new(step: Duration, lifecycle: Duration) -> Self {
+        Self { step, lifecycle }
+    }
+}
+
+impl Default for TimeoutConfig {
+    fn default() -> Self {
+        Self {
+            step: DEFAULT_STEP_TIMEOUT,
+            lifecycle: DEFAULT_INIT_TIMEOUT,
+        }
+    }
+}
 
 /// Result of a safe partition call, including fault information.
 #[derive(Debug)]
@@ -42,37 +71,42 @@ impl FaultResult {
 }
 
 /// Execute a partition's init() with panic catching and timeout detection.
-pub fn safe_init(partition: &mut dyn Partition) -> FaultResult {
+pub fn safe_init(partition: &mut dyn Partition, timeouts: &TimeoutConfig) -> FaultResult {
     let id = partition.id().to_string();
-    safe_call(&id, "init", Some(INIT_TIMEOUT), || partition.init())
+    safe_call(&id, "init", Some(timeouts.lifecycle), || partition.init())
 }
 
 /// Execute a partition's step() with panic catching and timeout detection.
-pub fn safe_step(partition: &mut dyn Partition, dt: f64) -> FaultResult {
+pub fn safe_step(partition: &mut dyn Partition, dt: f64, timeouts: &TimeoutConfig) -> FaultResult {
     let id = partition.id().to_string();
-    safe_call(&id, "step", Some(STEP_TIMEOUT), || partition.step(dt))
+    safe_call(&id, "step", Some(timeouts.step), || partition.step(dt))
 }
 
 /// Execute a partition's shutdown() with panic catching and timeout detection.
-pub fn safe_shutdown(partition: &mut dyn Partition) -> FaultResult {
+pub fn safe_shutdown(partition: &mut dyn Partition, timeouts: &TimeoutConfig) -> FaultResult {
     let id = partition.id().to_string();
-    safe_call(&id, "shutdown", Some(INIT_TIMEOUT), || partition.shutdown())
+    safe_call(&id, "shutdown", Some(timeouts.lifecycle), || {
+        partition.shutdown()
+    })
 }
 
 /// Execute a partition's contribute_state() with panic catching and timeout detection.
-pub fn safe_contribute_state(partition: &dyn Partition) -> Result<toml::Value, PartitionError> {
+pub fn safe_contribute_state(
+    partition: &dyn Partition,
+    timeouts: &TimeoutConfig,
+) -> Result<toml::Value, PartitionError> {
     let id = partition.id().to_string();
     let start = Instant::now();
     let result = panic::catch_unwind(AssertUnwindSafe(|| partition.contribute_state()));
     let elapsed = start.elapsed();
 
-    if elapsed > STEP_TIMEOUT {
+    if elapsed > timeouts.step {
         return Err(PartitionError::new(
             &id,
             "contribute_state",
             format!(
                 "operation exceeded timeout of {}ms (took {}ms)",
-                STEP_TIMEOUT.as_millis(),
+                timeouts.step.as_millis(),
                 elapsed.as_millis()
             ),
         ));
@@ -88,9 +122,10 @@ pub fn safe_contribute_state(partition: &dyn Partition) -> Result<toml::Value, P
 pub fn safe_load_state(
     partition: &mut dyn Partition,
     state: toml::Value,
+    timeouts: &TimeoutConfig,
 ) -> FaultResult {
     let id = partition.id().to_string();
-    safe_call(&id, "load_state", Some(INIT_TIMEOUT), || {
+    safe_call(&id, "load_state", Some(timeouts.lifecycle), || {
         partition.load_state(state)
     })
 }
@@ -103,11 +138,6 @@ pub fn safe_load_state(
 /// **Known limitation**: Timeout detection is post-hoc — the operation runs to
 /// completion (or panic) on the current thread, and the elapsed time is checked
 /// afterward. This does **not** preempt a long-running or stuck operation.
-/// True preemptive timeout enforcement would require spawning the operation on
-/// a separate thread and aborting it, which is left as a future enhancement.
-///
-/// Uses AssertUnwindSafe to wrap the closure since partition references are
-/// not inherently UnwindSafe.
 fn safe_call<F>(
     partition_id: &str,
     operation: &str,

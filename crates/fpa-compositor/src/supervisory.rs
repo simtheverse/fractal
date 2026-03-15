@@ -163,6 +163,8 @@ pub struct SupervisoryCompositor {
     layer_depth: u32,
     /// Partitions waiting to be spawned (consumed during init).
     pending_partitions: Vec<Box<dyn Partition>>,
+    /// Fault handling timeout configuration (FPA-011).
+    timeout_config: fault::TimeoutConfig,
     /// Default step interval for partition tasks.
     step_interval: Duration,
     /// Per-partition step intervals (overrides `step_interval` for specific partitions).
@@ -198,6 +200,7 @@ impl SupervisoryCompositor {
             output_store: Arc::new(Mutex::new(HashMap::new())),
             heartbeat_timeout,
             layer_depth: 0,
+            timeout_config: fault::TimeoutConfig::default(),
             pending_partitions: partitions,
             step_interval: Duration::from_millis(10),
             partition_intervals: HashMap::new(),
@@ -223,6 +226,11 @@ impl SupervisoryCompositor {
     pub fn with_layer_depth(mut self, depth: u32) -> Self {
         self.layer_depth = depth;
         self
+    }
+
+    /// Set the fault handling timeout configuration (FPA-011).
+    pub fn set_timeout_config(&mut self, config: fault::TimeoutConfig) {
+        self.timeout_config = config;
     }
 
     /// Set the step interval for partition task loops.
@@ -378,13 +386,15 @@ impl SupervisoryCompositor {
                 .get(&partition_id)
                 .copied()
                 .unwrap_or(self.step_interval);
+            let lifecycle_timeout = self.timeout_config.lifecycle;
+            let step_timeout = self.timeout_config.step;
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let join_handle = tokio::spawn(async move {
                 // Initialize with deadline monitoring (FPA-011).
                 // Runs on a blocking thread so the tokio worker is free.
                 let partition = match supervised_lifecycle(
-                    partition, fault::INIT_TIMEOUT, "init",
+                    partition, lifecycle_timeout, "init",
                     |p| { p.init()?; Ok(()) },
                 ).await {
                     Ok((p, ())) => {
@@ -425,7 +435,7 @@ impl SupervisoryCompositor {
                         Ok(()) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                             if let Some(p) = partition.take() {
                                 match supervised_lifecycle(
-                                    p, fault::INIT_TIMEOUT, "shutdown",
+                                    p, lifecycle_timeout, "shutdown",
                                     |p| { p.shutdown()?; Ok(()) },
                                 ).await {
                                     Ok((_p, ())) => { /* shutdown succeeded */ }
@@ -453,7 +463,7 @@ impl SupervisoryCompositor {
                     // Step with deadline monitoring (FPA-011).
                     let p = partition.take().unwrap();
                     match supervised_lifecycle(
-                        p, fault::STEP_TIMEOUT, "step",
+                        p, step_timeout, "step",
                         move |p| { p.step(dt)?; Ok(()) },
                     ).await {
                         Ok((p, ())) => { partition = Some(p); }
@@ -493,7 +503,7 @@ impl SupervisoryCompositor {
                     // Contribute state with deadline monitoring (FPA-011).
                     let p = partition.take().unwrap();
                     match supervised_lifecycle(
-                        p, fault::STEP_TIMEOUT, "contribute_state",
+                        p, step_timeout, "contribute_state",
                         |p| p.contribute_state(),
                     ).await {
                         Ok((p, value)) => {
