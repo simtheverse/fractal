@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// A composition fragment at any scope in the fractal structure.
 /// Can represent layer 0 (system), layer 1 (partition), or deeper scopes.
@@ -13,9 +13,11 @@ pub struct CompositionFragment {
     #[serde(default)]
     pub system: HashMap<String, toml::Value>,
 
-    /// Partition selections — maps partition name to its config
+    /// Partition selections — maps partition name to its config.
+    /// Uses BTreeMap for deterministic iteration order: partition
+    /// creation and stepping order is the same across runs.
     #[serde(default)]
-    pub partitions: HashMap<String, PartitionConfig>,
+    pub partitions: BTreeMap<String, PartitionConfig>,
 
     /// System-level events
     #[serde(default)]

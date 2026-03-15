@@ -3,7 +3,9 @@
 //! Messages that cross network boundaries must be serializable. The
 //! `NetworkMessage` subtrait adds `Serialize + DeserializeOwned` bounds
 //! without affecting the base `Message` trait. Codecs handle the actual
-//! serialization format — `JsonCodec` is the default.
+//! serialization format — `JsonCodec` is provided with the `json-codec`
+//! feature; domain applications can implement `MessageCodec` for custom
+//! formats regardless of feature flags.
 
 use std::any::Any;
 
@@ -24,6 +26,7 @@ impl<T: Message + Serialize + DeserializeOwned> NetworkMessage for T {}
 ///
 /// Each `NetworkMessage` type gets a codec registered with the `NetworkBus`.
 /// The codec handles the conversion between typed messages and byte buffers.
+/// Implement this trait for custom serialization formats (bincode, protobuf, etc.).
 pub trait MessageCodec: Send + Sync {
     /// Serialize a type-erased message to bytes.
     ///
@@ -37,13 +40,14 @@ pub trait MessageCodec: Send + Sync {
 
 /// JSON codec for a specific `NetworkMessage` type.
 ///
-/// Uses `serde_json` for serialization. This is the default codec for
-/// network transport — domain applications can implement `MessageCodec`
-/// for custom formats (e.g., bincode, protobuf).
+/// Uses `serde_json` for serialization. Domain applications can implement
+/// `MessageCodec` directly for custom formats without this feature.
+#[cfg(feature = "json-codec")]
 pub struct JsonCodec<M> {
     _marker: std::marker::PhantomData<M>,
 }
 
+#[cfg(feature = "json-codec")]
 impl<M> JsonCodec<M> {
     pub fn new() -> Self {
         Self {
@@ -52,6 +56,7 @@ impl<M> JsonCodec<M> {
     }
 }
 
+#[cfg(feature = "json-codec")]
 impl<M: NetworkMessage + Sync> MessageCodec for JsonCodec<M> {
     fn serialize(&self, msg: &dyn Any) -> Vec<u8> {
         let typed = msg

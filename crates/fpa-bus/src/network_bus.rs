@@ -10,9 +10,8 @@
 //! serialization for types that need it.
 
 use crate::bus::{Bus, CloneableMessage, ErasedReader, Transport};
-use crate::network_message::{JsonCodec, MessageCodec, NetworkMessage};
+use crate::network_message::MessageCodec;
 use fpa_contract::message::DeliverySemantic;
-use fpa_contract::{DumpRequest, LoadRequest, SharedContext, TransitionRequest};
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, Weak};
@@ -60,22 +59,41 @@ impl NetworkBus {
         }
     }
 
-    /// Register a JSON codec for a `NetworkMessage` type.
+    /// Register a custom codec for a message type identified by TypeId.
     ///
     /// Once registered, messages of this type are serialized to bytes on
     /// publish and deserialized on read. Without registration, the bus
     /// falls back to clone-based delivery for this type.
-    pub fn register_codec<M: NetworkMessage + Sync>(&self) {
+    ///
+    /// This method is always available regardless of feature flags.
+    /// Use it to register codecs for custom serialization formats.
+    pub fn register_custom_codec(&self, type_id: TypeId, codec: Arc<dyn MessageCodec>) {
         let mut codecs = self.codecs.lock().unwrap();
-        codecs.insert(TypeId::of::<M>(), Arc::new(JsonCodec::<M>::new()));
+        codecs.insert(type_id, codec);
     }
 
-    /// Builder: pre-register codecs for all framework message types.
+    /// Register a JSON codec for a `NetworkMessage` type.
+    ///
+    /// Convenience method that creates a `JsonCodec<M>` and registers it.
+    /// Requires the `json-codec` feature.
+    #[cfg(feature = "json-codec")]
+    pub fn register_codec<M: crate::network_message::NetworkMessage + Sync>(&self) {
+        self.register_custom_codec(
+            TypeId::of::<M>(),
+            Arc::new(crate::network_message::JsonCodec::<M>::new()),
+        );
+    }
+
+    /// Builder: pre-register JSON codecs for all framework message types.
     ///
     /// Registers SharedContext, TransitionRequest, DumpRequest, and
     /// LoadRequest. Domain applications should call this and then
     /// register their own message codecs.
+    ///
+    /// Requires the `json-codec` feature.
+    #[cfg(feature = "json-codec")]
     pub fn with_framework_codecs(self) -> Self {
+        use fpa_contract::{DumpRequest, LoadRequest, SharedContext, TransitionRequest};
         self.register_codec::<SharedContext>();
         self.register_codec::<TransitionRequest>();
         self.register_codec::<DumpRequest>();

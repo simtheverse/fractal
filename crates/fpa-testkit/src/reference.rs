@@ -75,9 +75,11 @@ impl ReferenceFile {
             .collect();
         impl_versions.sort();
 
-        // Record contract versions from framework crate versions.
+        // Record contract versions. In a workspace where all crates share
+        // a version, this is the workspace version. When versions diverge,
+        // each crate's version should be recorded individually.
         let contract_versions = vec![
-            format!("fpa-contract={}", env!("CARGO_PKG_VERSION")),
+            format!("fpa-contract={}", fpa_contract::VERSION),
         ];
 
         let provenance = Provenance {
