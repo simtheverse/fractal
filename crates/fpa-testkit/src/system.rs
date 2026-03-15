@@ -19,6 +19,12 @@ pub enum SystemError {
     Partition(PartitionError),
     Config(String),
     Compose(ComposeError),
+    /// An operation failed and the subsequent shutdown also failed.
+    /// The primary error is the root cause; the shutdown error is secondary.
+    WithShutdownFailure {
+        primary: Box<SystemError>,
+        shutdown: PartitionError,
+    },
 }
 
 impl std::fmt::Display for SystemError {
@@ -27,6 +33,9 @@ impl std::fmt::Display for SystemError {
             SystemError::Partition(e) => write!(f, "{}", e),
             SystemError::Config(msg) => write!(f, "config error: {}", msg),
             SystemError::Compose(e) => write!(f, "{}", e),
+            SystemError::WithShutdownFailure { primary, shutdown } => {
+                write!(f, "{}; shutdown also failed: {}", primary, shutdown)
+            }
         }
     }
 }
@@ -83,14 +92,15 @@ impl System {
         let actual_dt = self.dt.unwrap_or(dt);
         if let Err(init_err) = self.compositor.init() {
             // Best-effort shutdown for any partitions that initialized
-            // before the failure. Log shutdown errors but prioritize the
-            // init error since it's the root cause.
+            // before the failure.
+            let init_sys_err: SystemError = init_err.into();
             if let Err(shutdown_err) = self.compositor.shutdown() {
-                eprintln!(
-                    "warning: shutdown after init failure also failed: {shutdown_err}"
-                );
+                return Err(SystemError::WithShutdownFailure {
+                    primary: Box::new(init_sys_err),
+                    shutdown: shutdown_err,
+                });
             }
-            return Err(init_err.into());
+            return Err(init_sys_err);
         }
 
         let result = (|| {

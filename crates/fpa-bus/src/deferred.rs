@@ -14,6 +14,7 @@
 use crate::bus::{Bus, CloneableMessage, ErasedReader, Transport};
 use fpa_contract::message::DeliverySemantic;
 use std::any::TypeId;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// A pending message captured during deferred mode.
@@ -32,6 +33,11 @@ struct PendingMessage {
 struct DeferredState {
     deferred: bool,
     pending: Vec<PendingMessage>,
+    /// Index from TypeId to position in `pending` for LatestValue messages.
+    /// When a LatestValue publish arrives for a TypeId already in the map,
+    /// the existing entry is replaced in-place rather than appended,
+    /// honoring LatestValue semantics even within the deferred queue.
+    latest_value_index: HashMap<TypeId, usize>,
 }
 
 /// Bus wrapper that queues messages during deferred mode and flushes them
@@ -68,6 +74,7 @@ impl DeferredBus {
             state: Mutex::new(DeferredState {
                 deferred: false,
                 pending: Vec::new(),
+                latest_value_index: HashMap::new(),
             }),
         }
     }
@@ -97,6 +104,7 @@ impl DeferredBus {
         let messages = {
             let mut state = self.state.lock().unwrap();
             state.deferred = false;
+            state.latest_value_index.clear();
             std::mem::take(&mut state.pending)
         };
         for msg in messages {
@@ -120,11 +128,30 @@ impl Bus for DeferredBus {
         {
             let mut state = self.state.lock().unwrap();
             if state.deferred {
-                state.pending.push(PendingMessage {
-                    type_id,
-                    semantic,
-                    msg,
-                });
+                match semantic {
+                    DeliverySemantic::LatestValue => {
+                        // Coalesce: replace existing entry for this TypeId,
+                        // honoring LatestValue semantics within the queue.
+                        if let Some(&idx) = state.latest_value_index.get(&type_id) {
+                            state.pending[idx].msg = msg;
+                        } else {
+                            let idx = state.pending.len();
+                            state.latest_value_index.insert(type_id, idx);
+                            state.pending.push(PendingMessage {
+                                type_id,
+                                semantic,
+                                msg,
+                            });
+                        }
+                    }
+                    DeliverySemantic::Queued => {
+                        state.pending.push(PendingMessage {
+                            type_id,
+                            semantic,
+                            msg,
+                        });
+                    }
+                }
                 return;
             }
         }

@@ -436,13 +436,13 @@ async fn stale_partitions_detected() {
     // Instead verify via direct store inspection (already tested in staleness test above).
 }
 
-/// Stale partition produces StateContribution with fresh=false and age_ms > 0.
+/// Faulted partition causes contribute_state to return an error.
 ///
 /// A partition that faults stops producing output. After the heartbeat timeout
-/// passes, contribute_state() should report fresh=false and age_ms > 0 for the
-/// faulted partition.
+/// passes, contribute_state() should return an error because the compositor
+/// detects the faulted partition and refuses to produce partial state.
 #[tokio::test]
-async fn stale_partition_state_contribution_has_fresh_false() {
+async fn faulted_partition_fails_contribute_state() {
     let bus = InProcessBus::new("test-bus");
 
     struct FailOnSecondStep {
