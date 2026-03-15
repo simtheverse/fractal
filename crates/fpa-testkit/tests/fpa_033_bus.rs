@@ -35,6 +35,8 @@ fn sensor_publishes_readings_on_bus() {
     assert_eq!(reading.source, "sensor");
     // step 1: value = 1 * 2.0 + 1.0 = 3.0
     assert!((reading.value - 3.0).abs() < 1e-12);
+
+    compositor.shutdown().unwrap();
 }
 
 /// Follower subscribes to SensorReading and publishes TestCommand when
@@ -65,6 +67,8 @@ fn follower_publishes_command_on_threshold_crossing() {
     let cmd = cmd_reader.read().expect("command should be published when threshold crossed");
     assert_eq!(cmd.sequence, 1);
     assert!(cmd.command.contains("threshold_crossed"));
+
+    compositor.shutdown().unwrap();
 }
 
 /// Full pipeline: Sensor → Follower → Recorder with queued delivery.

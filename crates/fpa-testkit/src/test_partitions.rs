@@ -136,29 +136,20 @@ impl Partition for Sensor {
             PartitionError::new(&self.id, "load_state", "expected table")
         })?;
 
-        self.scale = table
-            .get("scale")
-            .and_then(|v| v.as_float())
-            .unwrap_or(self.scale);
-        self.offset = table
-            .get("offset")
-            .and_then(|v| v.as_float())
-            .unwrap_or(self.offset);
-        self.step_count = table
-            .get("step_count")
-            .and_then(|v| v.as_integer())
-            .unwrap_or(self.step_count);
+        let err = |field: &str| {
+            PartitionError::new(&self.id, "load_state", format!("missing or invalid field '{}'", field))
+        };
 
+        self.scale = table.get("scale").and_then(|v| v.as_float()).ok_or_else(|| err("scale"))?;
+        self.offset = table.get("offset").and_then(|v| v.as_float()).ok_or_else(|| err("offset"))?;
+        self.step_count = table.get("step_count").and_then(|v| v.as_integer()).ok_or_else(|| err("step_count"))?;
+
+        let history_arr = table.get("history").and_then(|v| v.as_array()).ok_or_else(|| err("history"))?;
         self.history.clear();
-        if let Some(arr) = table.get("history").and_then(|v| v.as_array()) {
-            for entry in arr {
-                if let (Some(tick), Some(value)) = (
-                    entry.get("tick").and_then(|v| v.as_integer()),
-                    entry.get("value").and_then(|v| v.as_float()),
-                ) {
-                    self.history.push((tick, value));
-                }
-            }
+        for entry in history_arr {
+            let tick = entry.get("tick").and_then(|v| v.as_integer()).ok_or_else(|| err("history[].tick"))?;
+            let value = entry.get("value").and_then(|v| v.as_float()).ok_or_else(|| err("history[].value"))?;
+            self.history.push((tick, value));
         }
 
         Ok(())
@@ -269,18 +260,13 @@ impl Partition for Follower {
             PartitionError::new(&self.id, "load_state", "expected table")
         })?;
 
-        self.last_reading = table
-            .get("last_reading")
-            .and_then(|v| v.as_float())
-            .unwrap_or(self.last_reading);
-        self.commands_sent = table
-            .get("commands_sent")
-            .and_then(|v| v.as_integer())
-            .unwrap_or(self.commands_sent);
-        self.threshold = table
-            .get("threshold")
-            .and_then(|v| v.as_float())
-            .unwrap_or(self.threshold);
+        let err = |field: &str| {
+            PartitionError::new(&self.id, "load_state", format!("missing or invalid field '{}'", field))
+        };
+
+        self.last_reading = table.get("last_reading").and_then(|v| v.as_float()).ok_or_else(|| err("last_reading"))?;
+        self.commands_sent = table.get("commands_sent").and_then(|v| v.as_integer()).ok_or_else(|| err("commands_sent"))?;
+        self.threshold = table.get("threshold").and_then(|v| v.as_float()).ok_or_else(|| err("threshold"))?;
 
         Ok(())
     }
@@ -383,18 +369,13 @@ impl Partition for Recorder {
             PartitionError::new(&self.id, "load_state", "expected table")
         })?;
 
-        self.entries_logged = table
-            .get("entries_logged")
-            .and_then(|v| v.as_integer())
-            .unwrap_or(self.entries_logged);
-        self.commands_received = table
-            .get("commands_received")
-            .and_then(|v| v.as_integer())
-            .unwrap_or(self.commands_received);
-        self.last_tick_seen = table
-            .get("last_tick_seen")
-            .and_then(|v| v.as_integer())
-            .unwrap_or(self.last_tick_seen);
+        let err = |field: &str| {
+            PartitionError::new(&self.id, "load_state", format!("missing or invalid field '{}'", field))
+        };
+
+        self.entries_logged = table.get("entries_logged").and_then(|v| v.as_integer()).ok_or_else(|| err("entries_logged"))?;
+        self.commands_received = table.get("commands_received").and_then(|v| v.as_integer()).ok_or_else(|| err("commands_received"))?;
+        self.last_tick_seen = table.get("last_tick_seen").and_then(|v| v.as_integer()).ok_or_else(|| err("last_tick_seen"))?;
 
         Ok(())
     }
