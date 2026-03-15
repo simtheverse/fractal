@@ -18,7 +18,7 @@ use crate::system::{System, SystemError};
 pub struct Provenance {
     /// Description of how this reference was generated.
     pub command: String,
-    /// Timestamp when this reference was generated (RFC 3339).
+    /// Timestamp when this reference was generated (epoch seconds).
     pub timestamp: String,
     /// Implementation versions used (e.g., partition implementation versions).
     pub impl_versions: Vec<String>,
@@ -58,6 +58,7 @@ impl ReferenceFile {
         ticks: u64,
         dt: f64,
     ) -> Result<Self, SystemError> {
+        let transport = bus.transport();
         let mut system = System::from_fragment(fragment, registry, bus)?;
         let actual_dt = system.dt().unwrap_or(dt);
         let output = system.run(ticks, dt)?;
@@ -84,10 +85,10 @@ impl ReferenceFile {
 
         let provenance = Provenance {
             command: format!(
-                "generate ticks={} dt={} transport={}",
+                "generate ticks={} dt={} transport={:?}",
                 ticks,
                 actual_dt,
-                "InProcess"
+                transport
             ),
             timestamp: current_timestamp(),
             impl_versions,
