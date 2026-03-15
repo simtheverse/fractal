@@ -662,8 +662,12 @@ impl Compositor {
     ///
     /// Drains bus-mediated DumpRequest/LoadRequest messages and merges them
     /// with programmatic requests. Dump invokes `contribute_state()` on all
-    /// partitions using post-tick-N-1 state. Load replaces partition state
-    /// via `load_state()`.
+    /// partitions using post-tick-N-1 state.
+    ///
+    /// Load requires the execution state machine to be in a non-processing
+    /// state (FPA-023). Phase 1 transiently pauses the compositor before
+    /// applying loads, then resumes — the same pattern used by
+    /// `Partition::load_state()` for nested compositors.
     fn process_pending_dump_load(&mut self) -> Result<(), PartitionError> {
         // Drain bus-mediated dump requests
         if !self.dump_reader.read_all().is_empty() {
@@ -675,25 +679,31 @@ impl Compositor {
             self.last_dump_result = Some(self.dump()?);
         }
 
-        // Drain bus-mediated load requests and apply in FIFO order.
-        // Programmatic request_load() is applied last so the explicit API
-        // takes precedence over bus-mediated requests (last applied wins).
-        //
-        // Note on FPA-023 idle precondition: the spec requires load to be
-        // invocable only when "no partition lifecycle methods are in flight
-        // AND the execution state machine is in a non-processing state."
-        // Phase 1 runs before any partition stepping within run_tick, so no
-        // lifecycle methods are in flight. The state machine is Running, but
-        // the spec also notes that for lock-step compositors "load() and
-        // step() cannot execute concurrently" — Phase 1 satisfies this by
-        // construction. This matches the existing request_load() path.
-        for load_req in self.load_reader.read_all() {
-            self.apply_state_fragment(load_req.fragment)?;
+        // Collect all pending loads: bus-mediated first, then programmatic
+        // (last applied wins, so the explicit API takes precedence).
+        let bus_loads: Vec<_> = self.load_reader.read_all();
+        let programmatic_load = self.pending_load.take();
+
+        if bus_loads.is_empty() && programmatic_load.is_none() {
+            return Ok(());
         }
-        if let Some(fragment) = self.pending_load.take() {
-            self.apply_state_fragment(fragment)?;
-        }
-        Ok(())
+
+        // Transiently pause to satisfy FPA-023's idle precondition, apply
+        // all loads, then resume. No partition methods are called during
+        // pause/resume, and SharedContext isn't published until Phase 2,
+        // so the transient Paused state is not observable.
+        self.pause()?;
+        let result = (|| {
+            for load_req in bus_loads {
+                self.apply_state_fragment(load_req.fragment)?;
+            }
+            if let Some(fragment) = programmatic_load {
+                self.apply_state_fragment(fragment)?;
+            }
+            Ok(())
+        })();
+        self.resume()?;
+        result
     }
 
     /// Apply a state fragment to partitions and system counters.

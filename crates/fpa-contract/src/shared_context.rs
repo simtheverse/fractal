@@ -45,10 +45,8 @@ impl Message for DumpRequest {
 /// Request to load a state fragment into the compositor (FPA-023).
 ///
 /// A partition publishes this on the bus to request a state load.
-/// The compositor drains these during Phase 1 (pre-tick, before any
-/// partition stepping) and applies the fragment. FPA-023 requires load
-/// to occur when processing is idle; Phase 1 satisfies this for lock-step
-/// compositors since no partition lifecycle methods are in flight.
+/// The compositor drains these during Phase 1 (pre-tick), transiently
+/// pausing to satisfy FPA-023's idle precondition before applying.
 #[derive(Debug, Clone)]
 pub struct LoadRequest {
     /// The TOML composition fragment to load.

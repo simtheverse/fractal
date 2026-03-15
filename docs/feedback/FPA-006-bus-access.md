@@ -31,25 +31,14 @@ The compositor now subscribes to `TransitionRequest`, `DumpRequest`, and
   before any partition stepping)
 - `TransitionRequest` is processed in Phase 3 (post-tick)
 
-## FPA-023 tension: load idle precondition
+## FPA-023 compliance: Phase 1 load processing
 
-FPA-023 requires load to occur "when no partition lifecycle methods are
-in flight AND the execution state machine is in a non-processing state."
-Bus-mediated `LoadRequest`s are drained in Phase 1 of `run_tick`, where
-the state machine is Running (a processing state). However:
-
-- No partition lifecycle methods are in flight during Phase 1 — stepping
-  hasn't started yet.
-- The spec notes that for lock-step compositors, "`load()` and `step()`
-  cannot execute concurrently" — Phase 1 satisfies this by construction.
-- The existing programmatic `request_load()` path uses the same Phase 1
-  mechanism.
-
-The formal state (Running) doesn't match the spec's "non-processing"
-requirement, but the operational invariant (no concurrent partition
-activity) is satisfied. This same tension exists for the programmatic
-`request_load()` path. The external `load()` API enforces the stricter
-Paused/Uninitialized check for callers outside the tick lifecycle.
+FPA-023 requires load to occur when the execution state machine is in a
+non-processing state. Phase 1 of `run_tick` transiently pauses the
+compositor before applying queued loads, then resumes — the same pattern
+used by `Partition::load_state()` for nested compositors. This formally
+satisfies the spec's idle precondition without requiring external callers
+to manage the pause/resume lifecycle.
 
 ## Spec implications
 
@@ -57,8 +46,3 @@ The spec should clarify that bus access is an implementation concern, not
 a trait concern. The `Partition` trait intentionally does not include a
 `set_bus()` method — this preserves strategy neutrality and avoids
 coupling all partitions to the bus abstraction.
-
-The spec may also benefit from distinguishing between "idle by state
-machine" (Paused/Uninitialized) and "idle by construction" (Phase 1 tick
-boundary where no partition methods are in flight). Both satisfy the
-intent of FPA-023's load precondition.
