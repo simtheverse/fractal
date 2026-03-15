@@ -98,13 +98,14 @@ pub struct Compositor {
 impl Compositor {
     /// Create a new compositor with the given partitions and bus.
     ///
-    /// Accepts any `Bus` implementation via `Arc<dyn Bus>`, enabling runtime
-    /// transport selection (FPA-004) and shared ownership so partitions can
-    /// hold bus references at construction time. The bus is wrapped in a
-    /// `DeferredBus` internally to enforce intra-tick message isolation
-    /// (FPA-014). For tests where partitions need to hold the same
-    /// `DeferredBus`, use `from_deferred_bus`.
-    /// For convenience with `InProcessBus`, use `Compositor::new_default`.
+    /// Wraps the bus in a `DeferredBus` internally. Partitions that were
+    /// constructed with the original `bus` will publish directly to it,
+    /// bypassing deferred mode — this is fine for partitions that don't
+    /// publish bus messages during `step()` (Counter, Accumulator, Doubler).
+    ///
+    /// For partitions that publish during `step()`, use `compose()` or
+    /// `from_deferred_bus()` so partitions hold the `DeferredBus` and
+    /// FPA-014 intra-tick isolation is enforced.
     pub fn new(partitions: Vec<Box<dyn Partition>>, bus: Arc<dyn Bus>) -> Self {
         Self::from_deferred_bus(partitions, Arc::new(DeferredBus::new(bus)))
     }
@@ -464,72 +465,14 @@ impl Compositor {
         // queued rather than immediately delivered. This ensures no partition
         // sees another partition's current-tick bus messages — the same
         // isolation guarantee the double buffer provides for SharedContext.
+        //
+        // Deferred mode is always restored on exit from Phase 2 — including
+        // fault paths — so the bus is never left in deferred state.
         self.bus.set_deferred(true);
-
-        // For multi-rate partitions, each partition steps `rate` times per outer
-        // tick with `dt / rate` per sub-step. If a partition faults mid-cycle and
-        // a fallback is registered, the fallback completes the remaining sub-steps.
-        let mut i = 0;
-        while i < self.partitions.len() {
-            let partition_id = self.partitions[i].id().to_string();
-            let rate = self.rate_config.get_rate(&partition_id);
-            let sub_dt = dt / rate as f64;
-
-            for sub in 0..rate {
-                let step_result = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
-
-                if let Err(step_err) = step_result.into_result() {
-                    // Check for fallback
-                    if let Some(mut fallback) = self.fallbacks.remove(&partition_id) {
-                        // Step the fallback for the failed sub-step
-                        let fallback_result = fault::safe_step(fallback.as_mut(), sub_dt, &self.timeout_config);
-                        if let Err(fallback_err) = fallback_result.into_result() {
-                            self.state_machine.force_state(ExecutionState::Error);
-                            return Err(fallback_err.with_layer_depth(self.layer_depth));
-                        }
-
-                        // Replace the partition with the fallback
-                        self.partitions[i] = fallback;
-
-                        // Complete remaining sub-steps with the fallback
-                        for _remaining in (sub + 1)..rate {
-                            let r = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
-                            if let Err(e) = r.into_result() {
-                                self.state_machine.force_state(ExecutionState::Error);
-                                return Err(e.with_layer_depth(self.layer_depth));
-                            }
-                        }
-                        break;
-                    }
-
-                    // No fallback - transition to Error and propagate
-                    self.state_machine.force_state(ExecutionState::Error);
-                    return Err(step_err.with_layer_depth(self.layer_depth));
-                }
-            }
-
-            // Collect output after all sub-steps (including fallback's remaining steps)
-            let state = fault::safe_contribute_state(self.partitions[i].as_ref(), &self.timeout_config)
-                .map_err(|e| e.with_layer_depth(self.layer_depth))?;
-            let envelope = StateContribution {
-                state,
-                fresh: true,
-                age_ms: 0,
-            };
-            self.double_buffer.write(&partition_id, envelope.to_toml());
-
-            // Step 3: Check for pending direct signals between partition steps.
-            self.collect_inner_signals();
-
-            i += 1;
-        }
-
-        // End deferred mode and flush queued bus messages to the inner bus.
-        // Messages are now available to subscribers but won't be read until
-        // the next tick's Phase 2 step calls (one-tick delay, matching
-        // SharedContext semantics).
+        let phase2_result = self.run_phase2_stepping(dt);
         self.bus.set_deferred(false);
         self.bus.flush();
+        phase2_result?;
 
         // Assemble shared context from current tick's partition outputs
         // and publish on the bus (FPA-014: after the tick barrier, before
@@ -792,6 +735,69 @@ impl Compositor {
             if let Some(et) = system.get("elapsed_time").and_then(|v| v.as_float()) {
                 self.elapsed_time = et;
             }
+        }
+        Ok(())
+    }
+
+    /// Phase 2 stepping loop, extracted so `run_tick` can guarantee deferred
+    /// mode cleanup regardless of fault paths (FPA-014, FPA-011).
+    fn run_phase2_stepping(&mut self, dt: f64) -> Result<(), PartitionError> {
+        // For multi-rate partitions, each partition steps `rate` times per outer
+        // tick with `dt / rate` per sub-step. If a partition faults mid-cycle and
+        // a fallback is registered, the fallback completes the remaining sub-steps.
+        let mut i = 0;
+        while i < self.partitions.len() {
+            let partition_id = self.partitions[i].id().to_string();
+            let rate = self.rate_config.get_rate(&partition_id);
+            let sub_dt = dt / rate as f64;
+
+            for sub in 0..rate {
+                let step_result = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
+
+                if let Err(step_err) = step_result.into_result() {
+                    // Check for fallback
+                    if let Some(mut fallback) = self.fallbacks.remove(&partition_id) {
+                        // Step the fallback for the failed sub-step
+                        let fallback_result = fault::safe_step(fallback.as_mut(), sub_dt, &self.timeout_config);
+                        if let Err(fallback_err) = fallback_result.into_result() {
+                            self.state_machine.force_state(ExecutionState::Error);
+                            return Err(fallback_err.with_layer_depth(self.layer_depth));
+                        }
+
+                        // Replace the partition with the fallback
+                        self.partitions[i] = fallback;
+
+                        // Complete remaining sub-steps with the fallback
+                        for _remaining in (sub + 1)..rate {
+                            let r = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
+                            if let Err(e) = r.into_result() {
+                                self.state_machine.force_state(ExecutionState::Error);
+                                return Err(e.with_layer_depth(self.layer_depth));
+                            }
+                        }
+                        break;
+                    }
+
+                    // No fallback - transition to Error and propagate
+                    self.state_machine.force_state(ExecutionState::Error);
+                    return Err(step_err.with_layer_depth(self.layer_depth));
+                }
+            }
+
+            // Collect output after all sub-steps (including fallback's remaining steps)
+            let state = fault::safe_contribute_state(self.partitions[i].as_ref(), &self.timeout_config)
+                .map_err(|e| e.with_layer_depth(self.layer_depth))?;
+            let envelope = StateContribution {
+                state,
+                fresh: true,
+                age_ms: 0,
+            };
+            self.double_buffer.write(&partition_id, envelope.to_toml());
+
+            // Check for pending direct signals between partition steps.
+            self.collect_inner_signals();
+
+            i += 1;
         }
         Ok(())
     }
