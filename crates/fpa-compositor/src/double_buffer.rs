@@ -18,8 +18,6 @@ pub struct DoubleBuffer {
     read: HashMap<String, toml::Value>,
     /// The write buffer accumulates the current tick's outputs.
     write: HashMap<String, toml::Value>,
-    /// Remembered capacity for re-reserving after clear.
-    capacity: usize,
 }
 
 impl DoubleBuffer {
@@ -28,17 +26,17 @@ impl DoubleBuffer {
         Self {
             read: HashMap::new(),
             write: HashMap::new(),
-            capacity: 0,
         }
     }
 
     /// Create a new double buffer with pre-reserved capacity for the expected
-    /// number of partitions. Avoids reallocation as partitions contribute state.
+    /// number of partitions. Avoids reallocation during the first two ticks.
+    /// After that, `HashMap::clear()` retains capacity so no re-reservation
+    /// is needed.
     pub fn with_capacity(partition_count: usize) -> Self {
         Self {
             read: HashMap::with_capacity(partition_count),
             write: HashMap::with_capacity(partition_count),
-            capacity: partition_count,
         }
     }
 
@@ -75,9 +73,6 @@ impl DoubleBuffer {
     pub fn swap(&mut self) {
         std::mem::swap(&mut self.read, &mut self.write);
         self.write.clear();
-        if self.capacity > 0 {
-            self.write.reserve(self.capacity.saturating_sub(self.write.capacity()));
-        }
     }
 }
 
