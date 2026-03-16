@@ -227,8 +227,9 @@ runtime role (FPA-009) with precise timing semantics. It integrates with:
   post-tick-N-1 state.
 - **Compositor fault handling** (FPA-011): Faults during any lifecycle invocation in any
   phase are caught by the compositor and wrapped with diagnostic context. For faults
-  during steady-state processing (`step()`), a configured fallback is activated if
-  available; all other faults propagate upward. The compositor does not silently absorb
+  during steady-state processing (`step()` under direct invocation, or the autonomous
+  processing loop under supervisory coordination), a configured fallback is activated
+  if available; all other faults propagate upward. The compositor does not silently absorb
   failures.
 - **Transport abstraction** (FPA-004): The tick lifecycle is one mechanism that
   makes the transport independence guarantee enforceable for tick-based systems —

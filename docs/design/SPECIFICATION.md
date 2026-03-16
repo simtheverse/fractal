@@ -615,8 +615,9 @@ responsible for enforcing these deadlines for its sub-partitions and for treatin
 timeout exactly as a fault equivalent to an error return or panic. The error shall
 include the compositor's context (which sub-partition faulted, during which operation)
 but the failure itself shall not be silently suppressed. The compositor shall respond to
-a fault as follows: if the fault occurs during steady-state processing (currently
-`step()`) and a fallback implementation is configured for the faulting sub-partition,
+a fault as follows: if the fault occurs during steady-state processing — `step()` under
+direct invocation, or the partition's autonomous processing loop under supervisory
+coordination — and a fallback implementation is configured for the faulting sub-partition,
 the compositor activates the fallback, logs the fault and fallback activation, and
 continues processing — the compositor does not return an error to the outer layer in
 this case, but the fault and fallback are recorded in the compositor's diagnostic log.

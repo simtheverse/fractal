@@ -378,11 +378,12 @@ When a sub-partition faults during any lifecycle invocation — including `step(
 `init()`, `shutdown()`, `contribute_state()`, and `load_state()` — detected via a
 returned error, a panic, or a timeout, the compositor responds based on what faulted:
 
-- **Steady-state processing faults** (currently `step()`): If a fallback implementation
-  is configured for the faulting sub-partition, the compositor activates it, logs the
-  fault and fallback activation, and continues processing without returning an error.
-  The fallback must have the same partition identity as the primary. The outer layer
-  never knows the primary implementation faulted. If no fallback is configured, the
+- **Steady-state processing faults** (`step()` under direct invocation, or the
+  partition's autonomous processing loop under supervisory coordination): If a fallback
+  implementation is configured for the faulting sub-partition, the compositor activates
+  it, logs the fault and fallback activation, and continues processing without returning
+  an error. The fallback must have the same partition identity as the primary. The outer
+  layer never knows the primary implementation faulted. If no fallback is configured, the
   compositor propagates the error.
 
 - **Lifecycle transition and state operation faults** (`init()`, `shutdown()`,

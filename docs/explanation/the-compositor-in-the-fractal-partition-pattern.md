@@ -148,11 +148,13 @@ which layer, which operation), and responds (FPA-011).
 
 The response depends on what faulted:
 
-- **Steady-state processing faults** (currently `step()`): If a fallback implementation
-  is configured for the faulting partition, the compositor activates it, logs the fault
-  and fallback activation, and continues processing. The fallback must have the same
-  partition identity as the primary. The outer layer does not see an error, but the fault
-  is recorded. If no fallback is configured, the compositor propagates the error.
+- **Steady-state processing faults** (`step()` under direct invocation, or the
+  partition's autonomous processing loop under supervisory coordination): If a fallback
+  implementation is configured for the faulting partition, the compositor activates it,
+  logs the fault and fallback activation, and continues processing. The fallback must
+  have the same partition identity as the primary. The outer layer does not see an error,
+  but the fault is recorded. If no fallback is configured, the compositor propagates the
+  error.
 - **All other faults** (`init()`, `shutdown()`, `contribute_state()`, `load_state()`):
   The compositor always propagates the error to the outer layer, regardless of fallback
   configuration. A fallback that has not been executing cannot provide coherent state or
