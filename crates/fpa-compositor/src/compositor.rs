@@ -120,12 +120,13 @@ impl Compositor {
         let transition_reader = bus.subscribe::<TransitionRequest>();
         let dump_reader = bus.subscribe::<DumpRequest>();
         let load_reader = bus.subscribe::<LoadRequest>();
+        let partition_count = partitions.len();
         Self {
             id: "compositor".to_string(),
             partitions,
             bus,
             state_machine: StateMachine::new(),
-            double_buffer: DoubleBuffer::new(),
+            double_buffer: DoubleBuffer::with_capacity(partition_count),
             fallbacks: HashMap::new(),
             tick_count: 0,
             elapsed_time: 0.0,

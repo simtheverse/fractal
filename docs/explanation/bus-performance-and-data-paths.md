@@ -16,8 +16,9 @@ state. The buffer swap at the start of each tick makes the previous tick's
 writes available for reading.
 
 This path is:
-- **Low overhead** — uses a pre-keyed `HashMap<String, toml::Value>`, avoiding
-  per-subscriber cloning and type erasure. No bus involvement.
+- **Low overhead** — uses a capacity-reserved `HashMap<String, toml::Value>`,
+  sized to the partition count at construction to avoid reallocation. No bus
+  involvement, no per-subscriber cloning, no type erasure.
 - **One insert per partition per tick** — the compositor inserts each partition's
   contributed state into the write buffer after stepping. The write buffer is
   cleared on each swap.
