@@ -75,20 +75,20 @@ rather than being engineered into the system.
 
 ### Configuration collapses to one concept
 
-Sessions, scenarios, entity definitions, and partition presets are all **composition
-fragments** — TOML blocks that select partition implementations at some
-scope. They all support the same `extends` inheritance, the same inline override
-semantics, and the same named-reference resolution. A session is a composition fragment
-at layer 0 that references scenario fragments at layer 1. A scenario is a composition
-fragment that references entity and partition fragments at narrower scopes.
+At every scope — system-level run definitions, partition selections, sub-partition
+presets, initial conditions — the configuration mechanism is the same: **composition
+fragments**. These are TOML blocks that select partition implementations at some scope.
+They all support the same `extends` inheritance, the same inline override semantics, and
+the same named-reference resolution. A composition fragment at layer 0 references
+fragments at layer 1. A fragment at layer 1 references fragments at narrower scopes.
 
 An outer-layer fragment can override any field defined by an inner-layer fragment it
-composes. This means a session file can fully define all scenario content inline —
+composes. This means a layer 0 fragment can fully define all layer 1 content inline —
 useful for simple cases or self-contained examples — or it can reference separate
-scenario files and override only the parameters relevant to a specific run. The same
-mechanism works at every scope: a scenario can override individual sub-model selections
-within a partition preset, an entity definition can override specific initial conditions
-from a template.
+fragments and override only the parameters relevant to a specific run. The same mechanism
+works at every scope: a layer 1 fragment can override individual sub-partition selections
+within a preset, an initial-conditions fragment can override specific values from a
+template.
 
 ### Events work everywhere
 

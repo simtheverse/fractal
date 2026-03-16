@@ -29,16 +29,19 @@ at one scale participates as a peer at the next scale up.
 
 ## Role 1: Assembly
 
-At startup, the compositor reads composition fragments (FPA-020, FPA-021) to determine
-which partition implementations to instantiate at its layer. A layer 0 orchestrator reads
-a session fragment and selects top-level partitions. A layer 1 compositor reads a scenario
-fragment and selects sub-partitions. The mechanism is the same at every layer — named
-composition fragments with inheritance and override semantics.
+At startup, the compositor reads composition fragments (FPA-019, FPA-020, FPA-021) to
+determine which partition implementations to instantiate at its layer. A layer 0
+orchestrator reads a layer 0 composition fragment and selects top-level partitions. A
+layer 1 compositor reads a layer 1 composition fragment and selects sub-partitions. The
+mechanism is the same at every layer — composition fragments with inheritance and
+override semantics. Assembly uses the standard composition entry point (FPA-015), which
+accepts a composition fragment, a partition registry mapping implementation names to
+constructors, and a bus instance.
 
 The compositor resolves `extends` chains, applies inline overrides, and instantiates the
-selected implementations. It connects each partition to the layer's bus and verifies that
-all contract dependencies are satisfied. Assembly is complete before any runtime
-processing begins.
+selected implementations via registry lookup. It connects each partition to the layer's
+bus and verifies that all contract dependencies are satisfied. Assembly is complete before
+any runtime processing begins.
 
 This role is the least controversial — most component frameworks have an assembly phase.
 What distinguishes FPA is that the assembly mechanism is uniform across layers: the same
@@ -102,10 +105,11 @@ coordination variable, trigger a phase change — it emits a typed request on th
 compositor receives the request, evaluates it against the state machine's transition
 rules, and applies or rejects it.
 
-Single-owner arbitration prevents conflicting mutations. If two partitions request
-conflicting transitions in the same processing cycle, the compositor resolves the
-conflict using a deterministic priority rule defined in the contract crate. All requests
-and resolutions are logged, providing an audit trail.
+Single-owner arbitration prevents conflicting mutations. The compositor evaluates each
+request against the state machine's transition rules and applies or rejects it. When
+multiple requests arrive in the same processing cycle, they are processed sequentially
+using a deterministic, transport-independent rule defined by the domain-specific
+specification. All requests and resolutions are logged, providing an audit trail.
 
 The arbitration pattern is the same at every layer. At layer 0, the orchestrator
 arbitrates system-level state machines. At layer 1, a partition's compositor arbitrates
