@@ -562,8 +562,8 @@ to an alternative sub-partition implementation) without propagating to the outer
 - Pass: A sub-partition emitting a stop request on a layer 1 bus causes
   the compositor to receive the request and emit a corresponding request on the layer 0
   bus; the orchestrator arbitrates the relayed request.
-- Pass: A compositor suppresses an internal request (e.g., by switching to a fallback
-  implementation) without any message appearing on the outer bus.
+- Pass: A compositor suppresses an internal request (e.g., handling it locally)
+  without any message appearing on the outer bus.
 - Pass: A compositor transforms a request before relaying — for example, adding context
   about which sub-partition originated the request.
 - Pass: The relay chain operates correctly through multiple layers: a layer 2 request
@@ -614,22 +614,11 @@ the call to an isolated worker that is discarded after a timeout). The composito
 responsible for enforcing these deadlines for its sub-partitions and for treating a
 timeout exactly as a fault equivalent to an error return or panic. The error shall
 include the compositor's context (which sub-partition faulted, during which operation)
-but the failure itself shall not be silently suppressed. The compositor shall respond to
-a fault as follows: if the fault occurs during steady-state processing — `step()` under
-direct invocation, or the partition's autonomous processing loop under supervisory
-coordination — and a fallback implementation is configured for the faulting sub-partition,
-the compositor activates the fallback, logs the fault and fallback activation, and
-continues processing — the compositor does not return an error to the outer layer in
-this case, but the fault and fallback are recorded in the compositor's diagnostic log.
-In all other cases — faults during `init()`, `shutdown()`, `contribute_state()`, or
-`load_state()`, or any fault when no fallback is configured — the compositor propagates
+but the failure itself shall not be silently suppressed. The compositor shall propagate
 the error to the outer layer by returning an error from its own trait method call, which
-cascades through the compositor chain until the orchestrator receives it. Faults during
-lifecycle transitions (init, shutdown) and state operations (contribute_state, load_state)
-always propagate because a fallback that has not been executing cannot provide coherent
-state or complete a lifecycle transition on behalf of the faulted primary. There shall be
+cascades through the compositor chain until the orchestrator receives it. There shall be
 no fault-specific bus channel or message type; the compositor's error return from its own
-trait call is the propagation mechanism when errors are propagated.
+trait call is the propagation mechanism.
 
 The compositor shall invoke all sub-partition lifecycle methods through fault-handling
 wrappers that catch panics, enforce per-invocation deadlines, and enrich errors with
@@ -638,16 +627,11 @@ without these protections.
 
 When a sub-partition fault is propagated to the outer layer, the compositor shall
 transition its execution state to Error before returning, preventing further lifecycle
-invocations in an inconsistent state. When a fallback is activated, the compositor
-remains in its current execution state.
+invocations in an inconsistent state.
 
 The error returned by the compositor includes context identifying the faulting
 sub-partition's identity, layer depth, and the operation that faulted — both in logged
 output and in the error value returned to the outer layer.
-
-A fallback implementation configured for a sub-partition shall have the same partition
-identity (`id()`) as the primary partition it replaces. The compositor shall reject
-registration of a fallback whose identity does not match the target partition.
 
 **Rationale:** A sub-partition fault means the system's state may be invalid.
 Silently continuing without a failed sub-component produces incorrect results;
@@ -656,24 +640,21 @@ data on reload; running after a failed `init()` means the system was never corre
 assembled. The compositor's role in fault handling is to detect faults — by catching raw panics
 under direct invocation, or by detecting heartbeat failures, error reports, or abnormal
 termination under supervisory coordination — add diagnostic context (which partition,
-which layer, which operation), and either propagate a clean error or activate a
-configured fallback.
-The outer layer sees the compositor's error return (not the raw panic) when errors are
-propagated, preserving encapsulation of the internal structure while ensuring the failure
-is visible. When a fallback is configured, the compositor logs the fault and the fallback
-activation, allowing the system to continue operating in a degraded mode rather than
-halting — this is valuable for systems that prioritize availability or where a
-lower-fidelity alternative can safely substitute for the faulted partition. Domain-specific
-systems may choose to mandate error propagation (fail-fast) as a policy by not
-configuring any fallbacks. A separate fault channel or fault message type would create a
+which layer, which operation), and propagate a clean error.
+The outer layer sees the compositor's error return (not the raw panic),
+preserving encapsulation of the internal structure while ensuring the failure
+is visible. Recovery from faults — such as activating a fallback implementation or
+retrying — is the responsibility of the partition itself or the orchestrator, not the
+compositor. This keeps the compositor's fault handling simple and predictable: detect,
+enrich, propagate. A separate fault channel or fault message type would create a
 parallel communication path with its own transport, relay, and arbitration semantics —
 complexity that is unnecessary because the compositor's call-and-return relationship with
 the outer layer already provides an error propagation path.
 
 **Verification Expectations:**
 - Pass: A sub-partition returning an error from `step()` is caught by the compositor;
-  with no fallback configured, the compositor returns an error from its own `step()`
-  call, which cascades to the orchestrator.
+  the compositor returns an error from its own `step()` call, which cascades to the
+  orchestrator.
 - Pass: A sub-partition panicking during `init()` is caught by the compositor; the
   compositor returns an error from its own `init()` call, preventing the run
   from starting.
@@ -684,11 +665,8 @@ the outer layer already provides an error propagation path.
   sub-partition's identity, layer depth, and the operation that faulted.
 - Pass: The compositor logs the fault with full details regardless of whether the outer
   layer also logs it.
-- Pass: When a fallback is configured for a sub-partition and that sub-partition faults
-  during `step()`, the compositor activates the fallback, logs the fault and fallback
-  activation, and continues processing without returning an error.
 - Fail: A sub-partition fault is silently absorbed by the compositor without logging and
-  without either propagating the error or activating a configured fallback.
+  without propagating the error.
 - Fail: A sub-partition fault propagates as a raw panic or unhandled exception without
   compositor context wrapping.
 - Pass: A compositor constructed with domain-specific timeout values enforces those

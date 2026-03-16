@@ -167,7 +167,7 @@ The compositor still:
   monitors partitions through heartbeats, health messages, or connection state. A
   partition that stops publishing, misses a heartbeat deadline, or disconnects is
   considered faulted. The compositor applies the same fault handling policy (FPA-011):
-  propagate the error or activate a fallback.
+  propagate the error to the outer layer.
 
 - **Manages relay.** Inter-layer requests from self-scheduling partitions still flow
   through the bus, and the compositor still has relay authority (FPA-010) over what
@@ -217,10 +217,9 @@ compositor uses mechanisms such as:
   an internal failure. The compositor receives it through normal bus subscription.
 
 The fault handling policy is the same regardless of detection mechanism: the compositor
-logs the fault with diagnostic context (which partition, which layer) and either
-propagates the error to the outer layer or activates a configured fallback (FPA-011).
-The difference is latency — a fault under supervisory coordination may take longer to
-detect than one under direct invocation.
+logs the fault with diagnostic context (which partition, which layer) and propagates
+the error to the outer layer (FPA-011). The difference is latency — a fault under
+supervisory coordination may take longer to detect than one under direct invocation.
 
 ## How core mechanisms adapt
 

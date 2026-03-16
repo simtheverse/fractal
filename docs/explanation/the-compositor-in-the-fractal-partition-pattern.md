@@ -128,8 +128,7 @@ relay gateway (FPA-010). It has full authority over what crosses its layer bound
 - **Transform.** Modify the request before relaying — add context, change the request
   type, convert an internal warning into an external stop request.
 - **Suppress.** Handle the request internally without forwarding. The compositor might
-  respond to a sub-partition failure by switching to a fallback rather than propagating
-  the failure outward.
+  handle a request locally without exposing it to the outer layer.
 - **Aggregate.** Combine multiple requests from a single processing cycle into one
   consolidated message on the outer bus.
 
@@ -146,23 +145,9 @@ When a sub-partition faults during any lifecycle invocation — `init()`, `step(
 or timing out, the compositor catches the fault, adds diagnostic context (which partition,
 which layer, which operation), and responds (FPA-011).
 
-The response depends on what faulted:
-
-- **Steady-state processing faults** (`step()` under direct invocation, or the
-  partition's autonomous processing loop under supervisory coordination): If a fallback
-  implementation is configured for the faulting partition, the compositor activates it,
-  logs the fault and fallback activation, and continues processing. The fallback must
-  have the same partition identity as the primary. The outer layer does not see an error,
-  but the fault is recorded. If no fallback is configured, the compositor propagates the
-  error.
-- **All other faults** (`init()`, `shutdown()`, `contribute_state()`, `load_state()`):
-  The compositor always propagates the error to the outer layer, regardless of fallback
-  configuration. A fallback that has not been executing cannot provide coherent state or
-  complete a lifecycle transition on behalf of the faulted primary.
-
-When propagating, the compositor returns an error from its own lifecycle method call,
-cascading through the compositor chain to the orchestrator. The compositor transitions
-to Error state before returning.
+The compositor propagates the error to the outer layer by returning an error from its own
+lifecycle method call, cascading through the compositor chain to the orchestrator. The
+compositor transitions to Error state before returning.
 
 The compositor enforces per-invocation elapsed-time deadlines for all lifecycle calls.
 Default values are 50 ms for step/contribute_state and 500 ms for
@@ -176,8 +161,8 @@ connection state, or error messages on the bus. The fault handling policy is the
 regardless of detection mechanism — only the detection latency differs.
 
 The compositor never silently absorbs a fault. Every fault is logged with full diagnostic
-context, and the compositor either activates a configured fallback or propagates the error.
-There is no third option.
+context and propagated. Recovery from faults — such as activating a fallback or retrying —
+is the responsibility of the partition itself or the orchestrator.
 
 ## Role 7: Partition on the outer layer
 
@@ -242,8 +227,8 @@ decides whether to relay it outward. The arbitration result (applied, rejected, 
 pending) may influence the relay decision.
 
 **Fault handling interacts with lifecycle and relay.** A fault detected during a lifecycle
-invocation may trigger a fallback (lifecycle), an error propagation (relay to the outer
-layer), or both. The compositor's fault handling policy determines which path is taken.
+invocation triggers error propagation to the outer layer. The compositor detects, enriches,
+and propagates — it does not attempt recovery.
 
 **The outer-partition role constrains all other roles.** The compositor must satisfy its
 outer contract. Its lifecycle coordination, bus management, arbitration, relay, and fault

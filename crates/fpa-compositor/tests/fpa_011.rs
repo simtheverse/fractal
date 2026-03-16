@@ -5,8 +5,7 @@ use std::sync::Arc;
 use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::state_machine::ExecutionState;
-use fpa_compositor::multi_rate::RateConfig;
-use fpa_contract::{Partition, PartitionError, StateContribution};
+use fpa_contract::{Partition, PartitionError};
 
 // --- Test partition implementations ---
 
@@ -189,53 +188,6 @@ impl Partition for SlowPartition {
     }
 }
 
-/// A simple fallback partition that always succeeds.
-struct FallbackPartition {
-    id: String,
-    step_count: u64,
-}
-
-impl FallbackPartition {
-    fn new(id: &str) -> Self {
-        Self {
-            id: id.to_string(),
-            step_count: 0,
-        }
-    }
-}
-
-impl Partition for FallbackPartition {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn init(&mut self) -> Result<(), PartitionError> {
-        Ok(())
-    }
-
-    fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
-        self.step_count += 1;
-        Ok(())
-    }
-
-    fn shutdown(&mut self) -> Result<(), PartitionError> {
-        Ok(())
-    }
-
-    fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
-        let mut table = toml::map::Map::new();
-        table.insert(
-            "fallback_steps".to_string(),
-            toml::Value::Integer(self.step_count as i64),
-        );
-        Ok(toml::Value::Table(table))
-    }
-
-    fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
-        Ok(())
-    }
-}
-
 // --- Tests ---
 
 /// Partition returning error from step() -> compositor catches and returns error with context.
@@ -300,56 +252,6 @@ fn error_includes_partition_id_and_operation() {
     assert_eq!(err.operation, "step");
 }
 
-/// With fallback configured: partition faults, fallback activated, compositor continues.
-#[test]
-fn fallback_activated_on_fault() {
-    let partitions: Vec<Box<dyn Partition>> = vec![
-        Box::new(FailingPartition::new("primary", "step")),
-    ];
-    let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Arc::new(bus));
-
-    // Register a fallback for "primary"
-    compositor.register_fallback("primary", Box::new(FallbackPartition::new("primary"))).unwrap();
-
-    compositor.init().unwrap();
-
-    // Tick should succeed because fallback takes over
-    let result = compositor.run_tick(1.0);
-    assert!(result.is_ok(), "compositor should continue with fallback");
-
-    // The fallback's state should be in the write buffer (wrapped in StateContribution)
-    let state = compositor.buffer().write_all().get("primary").unwrap();
-    let sc = StateContribution::from_toml(state).unwrap();
-    let table = sc.state.as_table().unwrap();
-    assert!(
-        table.contains_key("fallback_steps"),
-        "fallback partition state should be in the buffer"
-    );
-
-    // Subsequent ticks should also work (fallback replaced the primary)
-    let result = compositor.run_tick(1.0);
-    assert!(result.is_ok(), "subsequent ticks should succeed with fallback");
-}
-
-/// Fallback is also initialized during compositor init.
-#[test]
-fn fallback_with_panic_partition() {
-    let partitions: Vec<Box<dyn Partition>> = vec![
-        Box::new(PanickingPartition::new("panicker")),
-    ];
-    let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Arc::new(bus));
-
-    compositor.register_fallback("panicker", Box::new(FallbackPartition::new("panicker"))).unwrap();
-
-    compositor.init().unwrap();
-
-    // Panicking partition should be caught and fallback activated
-    let result = compositor.run_tick(1.0);
-    assert!(result.is_ok(), "compositor should recover from panic via fallback");
-}
-
 /// Timeout: partition step exceeding 50ms is treated as a fault.
 ///
 /// This test uses a partition that sleeps for 100ms, exceeding the 50ms timeout.
@@ -374,22 +276,6 @@ fn slow_partition_detected_as_timeout() {
         "error should mention timeout: {}",
         err.message
     );
-}
-
-/// Timeout with fallback: slow partition faults, fallback takes over.
-#[test]
-fn slow_partition_with_fallback() {
-    let partitions: Vec<Box<dyn Partition>> = vec![
-        Box::new(SlowPartition::new("slowpoke", 100)),
-    ];
-    let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Arc::new(bus));
-
-    compositor.register_fallback("slowpoke", Box::new(FallbackPartition::new("slowpoke"))).unwrap();
-
-    compositor.init().unwrap();
-    let result = compositor.run_tick(1.0);
-    assert!(result.is_ok(), "fallback should handle timeout fault");
 }
 
 /// Multiple partitions: one failing, one healthy. Compositor reports the failure.
@@ -589,28 +475,6 @@ fn slow_contribute_state_detected_as_timeout() {
     );
 }
 
-// --- New test: fallback identity mismatch rejected (FPA-011 audit gap) ---
-
-/// Registering a fallback with mismatched id returns an error.
-#[test]
-fn fallback_identity_mismatch_rejected() {
-    let partitions: Vec<Box<dyn Partition>> = vec![
-        Box::new(FallbackPartition::new("primary")),
-    ];
-    let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Arc::new(bus));
-
-    // Fallback has id "wrong-id" but is registered for "primary"
-    let result = compositor.register_fallback("primary", Box::new(FallbackPartition::new("wrong-id")));
-    assert!(result.is_err(), "registering fallback with mismatched id should return error");
-    let err = result.unwrap_err();
-    assert!(
-        err.message.contains("fallback id"),
-        "error message should mention fallback id mismatch: {}",
-        err.message
-    );
-}
-
 /// Init error includes correct operation context (not "step").
 #[test]
 fn error_during_init_includes_operation_context() {
@@ -630,79 +494,3 @@ fn error_during_init_includes_operation_context() {
     );
 }
 
-// --- Fallback failure during multi-rate remaining sub-steps ---
-
-/// A fallback partition that fails on its second step.
-struct FailOnSecondStep {
-    id: String,
-    count: u64,
-    initialized: bool,
-}
-
-impl FailOnSecondStep {
-    fn new(id: &str) -> Self {
-        Self {
-            id: id.to_string(),
-            count: 0,
-            initialized: false,
-        }
-    }
-}
-
-impl Partition for FailOnSecondStep {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn init(&mut self) -> Result<(), PartitionError> {
-        self.initialized = true;
-        Ok(())
-    }
-
-    fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
-        self.count += 1;
-        if self.count >= 2 {
-            return Err(PartitionError::new(&self.id, "step", "fallback failed on second step"));
-        }
-        Ok(())
-    }
-
-    fn shutdown(&mut self) -> Result<(), PartitionError> {
-        Ok(())
-    }
-
-    fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
-        Ok(toml::Value::Table(toml::map::Map::new()))
-    }
-
-    fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
-        Ok(())
-    }
-}
-
-/// Multi-rate partition (rate=3) fails on step. Fallback succeeds for the
-/// failed sub-step but fails on the next remaining sub-step. Compositor
-/// transitions to Error.
-#[test]
-fn fallback_failure_during_remaining_substeps() {
-    // FailingPartition fails on every step
-    let partitions: Vec<Box<dyn Partition>> = vec![
-        Box::new(FailingPartition::new("fragile", "step")),
-    ];
-    let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Arc::new(bus));
-
-    let mut rate_config = RateConfig::new();
-    rate_config.set_rate("fragile", 3);
-    compositor.set_rate_config(rate_config);
-
-    // Fallback that fails on its 2nd step — will succeed for the failed
-    // sub-step but fail on the next remaining sub-step
-    compositor.register_fallback("fragile", Box::new(FailOnSecondStep::new("fragile"))).unwrap();
-
-    compositor.init().unwrap();
-    let result = compositor.run_tick(1.0);
-
-    assert!(result.is_err(), "fallback failure on remaining sub-step should error");
-    assert_eq!(compositor.state(), ExecutionState::Error);
-}

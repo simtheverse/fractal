@@ -9,7 +9,7 @@ use fpa_bus::InProcessBus;
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::multi_rate::RateConfig;
 use fpa_contract::test_support::{Accumulator, Counter};
-use fpa_contract::{Partition, PartitionError, StateContribution};
+use fpa_contract::{Partition, StateContribution};
 
 /// Fast partition (rate 4) steps 4x per tick, slow partition (rate 1) steps 1x.
 #[test]
@@ -161,101 +161,6 @@ fn multi_rate_dt_is_divided_correctly() {
         (total - 2.0).abs() < 1e-12,
         "after 2 ticks with rate=4 and dt=1.0, total should be 2.0 but was {}",
         total,
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Fallback during multi-rate test (Fix 3)
-// ---------------------------------------------------------------------------
-
-/// A partition that fails after N steps. Used to test fallback activation
-/// during a multi-rate sub-step cycle.
-struct FailAfterN {
-    id: String,
-    count: u64,
-    fail_at: u64,
-    initialized: bool,
-}
-
-impl FailAfterN {
-    fn new(id: impl Into<String>, fail_at: u64) -> Self {
-        Self {
-            id: id.into(),
-            count: 0,
-            fail_at,
-            initialized: false,
-        }
-    }
-}
-
-impl Partition for FailAfterN {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn init(&mut self) -> Result<(), PartitionError> {
-        self.initialized = true;
-        Ok(())
-    }
-
-    fn step(&mut self, _dt: f64) -> Result<(), PartitionError> {
-        if !self.initialized {
-            return Err(PartitionError::new(&self.id, "step", "not initialized"));
-        }
-        self.count += 1;
-        if self.count >= self.fail_at {
-            return Err(PartitionError::new(&self.id, "step", "intentional failure"));
-        }
-        Ok(())
-    }
-
-    fn shutdown(&mut self) -> Result<(), PartitionError> {
-        self.initialized = false;
-        Ok(())
-    }
-
-    fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
-        let mut table = toml::map::Map::new();
-        table.insert("count".to_string(), toml::Value::Integer(self.count as i64));
-        Ok(toml::Value::Table(table))
-    }
-
-    fn load_state(&mut self, _state: toml::Value) -> Result<(), PartitionError> {
-        Ok(())
-    }
-}
-
-/// When a partition fails on sub-step 3 (0-indexed: sub=2) with rate=4,
-/// the fallback should be activated and complete the remaining sub-steps.
-/// Fallback (Counter) should be stepped for: sub 2 (the failed one) + sub 3 = 2 steps.
-#[test]
-fn fallback_completes_remaining_sub_steps() {
-    // FailAfterN with fail_at=3 means it succeeds on steps 1,2 and fails on step 3 (sub=2).
-    let partitions: Vec<Box<dyn Partition>> = vec![
-        Box::new(FailAfterN::new("fragile", 3)),
-    ];
-    let bus = InProcessBus::new("test-bus");
-    let mut compositor = Compositor::new(partitions, Arc::new(bus));
-
-    let mut rate_config = RateConfig::new();
-    rate_config.set_rate("fragile", 4);
-    compositor.set_rate_config(rate_config);
-
-    // Register a Counter as fallback
-    compositor.register_fallback("fragile", Box::new(Counter::new("fragile"))).unwrap();
-
-    compositor.init().unwrap();
-    compositor.run_tick(1.0).unwrap();
-
-    // The fallback Counter should have been stepped for:
-    //   sub 2 (the failed sub-step, fallback takes over) + sub 3 (remaining) = 2 steps
-    let write_buf = compositor.buffer().write_all();
-    let fragile_sc = StateContribution::from_toml(&write_buf["fragile"]).unwrap();
-    let count = fragile_sc.state.as_table().unwrap()
-        .get("count").unwrap().as_integer().unwrap();
-    assert_eq!(
-        count, 2,
-        "fallback should complete remaining sub-steps: 1 for the failed sub-step + 1 remaining = 2"
     );
 }
 
