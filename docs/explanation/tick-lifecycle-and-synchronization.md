@@ -46,12 +46,8 @@ Under the tick lifecycle convention, every compositor — at every layer — exe
  │  │ Check direct signals                    │  │
  │  │ Process lifecycle operations            │  │
  │  │ Process dump/load requests              │  │
- │  │ Assemble shared context from tick N-1   │  │
- │  │ Publish shared context, execution       │  │
- │  │   state (into write buffer)             │  │
  │  │ Swap read/write buffers                 │  │
- │  │   new read buffer = tick N-1 outputs +  │  │
- │  │     shared context + execution state    │  │
+ │  │   new read buffer = tick N-1 outputs    │  │
  │  │   new write buffer = cleared for tick N │  │
  │  └─────────────────────────────────────────┘  │
  │                                               │
@@ -59,18 +55,20 @@ Under the tick lifecycle convention, every compositor — at every layer — exe
  │  ┌─────────────────────────────────────────┐  │
  │  │ for each partition:                     │  │
  │  │   read from read buffer                 │  │
- │  │     (tick N-1 outputs, shared context,  │  │
- │  │      execution state)                   │  │
+ │  │     (tick N-1 partition outputs)        │  │
  │  │   step(dt)                              │  │
  │  │   write to write buffer                 │  │
  │  │   check direct signals                  │  │
+ │  │ ── tick barrier ──                      │  │
+ │  │ Assemble shared context from tick N     │  │
+ │  │   partition outputs (write buffer)      │  │
+ │  │ Publish shared context on bus           │  │
  │  └─────────────────────────────────────────┘  │
  │                                               │
  │  Phase 3: Post-tick                           │
  │  ┌─────────────────────────────────────────┐  │
  │  │ Evaluate events (against pre-step state)│  │
  │  │ Apply triggered actions (TOML order)    │  │
- │  │ Collect tick N outputs                  │  │
  │  │ Arbitrate bus requests                  │  │
  │  │ Relay to outer bus                      │  │
  │  │ Check direct signals                    │  │
@@ -99,18 +97,9 @@ some partitions would see the new entity and others would not.
 state snapshots capture temporally consistent data — every partition's contribution
 comes from the same completed tick.
 
-**Shared context assembly** collects all partition outputs from tick N-1 and publishes
-them as an atomic aggregate. The tick barrier ensures that no partition's output is
-missing or stale.
-
-**Shared context and execution state** are published into the buffer that will become
-the read buffer for tick N after the upcoming buffer swap — the buffer that partitions
-will read from during Phase 2. This ensures these values are stable and visible to all
-partitions throughout Phase 2.
-
 **Buffer swap** transitions the double-buffer: after the swap, the read buffer for
-tick N contains tick N-1 partition outputs plus the shared context and execution state
-published above, and a fresh write buffer is prepared for tick N outputs.
+tick N contains tick N-1 partition outputs, and a fresh write buffer is prepared for
+tick N outputs.
 
 ### Phase 2: Partition Stepping — Intra-tick Message Isolation
 
@@ -179,6 +168,15 @@ all steps complete, giving a worst-case latency of the longest partition's step 
 In both cases the compositor checks signals while it has exclusive control — not while
 partition state is being mutated — avoiding reentrancy hazards.
 
+**Shared context assembly** occurs after the tick barrier — once all partition `step()`
+calls have completed. The compositor assembles shared context from the current tick's
+partition outputs (the write buffer) and publishes it on the bus along with the current
+execution state. SharedContext is a typed bus message, not a double-buffer entry:
+partitions and external consumers subscribe to it through the same bus mechanism used
+for all other typed messages. Publishing after the tick barrier ensures shared context
+reflects the complete, consistent state of all partitions after tick N — no partition's
+output is missing or partial.
+
 ### Phase 3: Post-tick Processing
 
 Phase 3 runs after all partitions have completed their step for tick N.
@@ -221,8 +219,10 @@ runtime role (FPA-009) with precise timing semantics. It integrates with:
   Each compositor at each layer runs its own tick lifecycle on its own bus.
 - **Direct signals** (FPA-013): Polling between partition steps gives signals
   sub-tick latency while avoiding reentrancy hazards.
-- **Recursive state contribution** (FPA-012): The tick boundary in Phase 1 ensures
+- **Recursive state contribution** (FPA-012): The tick boundary ensures
   that `contribute_state()` calls observe consistent, completed state.
+  Dump requests processed in Phase 1 invoke `contribute_state()` using
+  post-tick-N-1 state.
 - **Compositor fault handling** (FPA-011): Faults during any lifecycle invocation in any
   phase are caught by the compositor, wrapped with diagnostic context, and propagated
   upward — the compositor does not silently absorb failures.

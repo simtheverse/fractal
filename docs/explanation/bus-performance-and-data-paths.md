@@ -101,17 +101,15 @@ Rust pattern (similar to how `Any` works). The key properties:
    and `bus.subscribe::<M>()` regardless of the underlying transport. No
    transport-specific imports or branches in partition code.
 
-2. **Runtime transport selection** — the compositor can choose transport from
-   configuration at startup. One binary supports all transport modes.
-   *Note: the bus layer supports this today; the compositor currently holds a
-   concrete `InProcessBus` and will be updated to accept `Box<dyn Bus>` in
-   Phase 4 Track M2.*
+2. **Runtime transport selection** — the compositor accepts `Arc<dyn Bus>` at
+   construction, enabling transport selection from configuration at startup.
+   One binary supports all transport modes.
 
 3. **Compile-time type safety** — `BusExt::publish<M>` and
    `BusExt::subscribe<M>` are fully generic. Type mismatches are caught at
    compile time. The type erasure is internal infrastructure, invisible to
    partition authors.
 
-4. **Mixed transports per layer** — once compositors accept `Box<dyn Bus>`
-   (Phase 4 Track M2), different layers can use different transports in the
-   same run (e.g., network at layer 0, in-process at layer 1).
+4. **Mixed transports per layer** — because compositors accept `Arc<dyn Bus>`,
+   different layers can use different transports in the same run (e.g., network
+   at layer 0, in-process at layer 1).

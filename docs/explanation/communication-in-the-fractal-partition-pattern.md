@@ -52,7 +52,7 @@ produce identical results is a correctness constraint, not a convenience.
 ### Inter-partition (horizontal)
 
 Peer partitions at the same layer exchange data through the bus. Partition A publishes
-`PartitionOutput`; Partition B consumes it. Neither knows the other exists. The bus
+its output message type; Partition B consumes it. Neither knows the other exists. The bus
 mediates. Communication is symmetric — any partition can publish, any can subscribe —
 and the compositor at that layer is not involved in routing.
 
@@ -97,10 +97,13 @@ Layer 1 bus (A):  partition-A compositor ↔ sub-A1, sub-A2, sub-A3
 Layer 1 bus (B):  partition-B compositor ↔ sub-B1, sub-B2, sub-B3
 ```
 
-A sub-partition at layer 1 never publishes directly to the layer 0 bus. If its request
-needs to reach the orchestrator, it travels through the compositor relay chain — layer 1
-compositor receives it on the layer 1 bus, decides to relay, and emits on the layer 0
-bus. Each compositor in the chain can intercept, transform, or suppress.
+A sub-partition at layer 1 never publishes directly to the layer 0 bus. Normal requests
+travel through the compositor relay chain — the layer 1 compositor receives a request on
+the layer 1 bus, decides to relay, and emits on the layer 0 bus. Each compositor in the
+chain can intercept, transform, or suppress. Safety-critical signals use the direct
+signal mechanism (FPA-013), which bypasses the relay chain within the declaring contract
+crate's hierarchy — these exist for scenarios where compositor suppression would be
+unsafe.
 
 This scoping preserves encapsulation: the outer layer sees its partitions as opaque
 units. It does not know — and cannot depend on — the internal structure of any partition.
@@ -136,8 +139,8 @@ strategy adaptation. For the complete picture, see
 The two communication roles that are most relevant here operate simultaneously:
 
 1. **Bus owner for its layer.** It creates the bus, connects partitions, publishes
-   shared context (shared state, execution state), and receives requests. In this role it
-   is the layer's orchestrator — the single authority for arbitration and state ownership.
+   shared context (aggregated partition state, execution state, tick metadata), and
+   receives requests. In this role it is the layer's orchestrator — the single authority for arbitration and state ownership.
 
 2. **Partition on the outer layer.** It implements the contract traits of the layer
    above, participates on the outer bus as a peer alongside other partitions, and

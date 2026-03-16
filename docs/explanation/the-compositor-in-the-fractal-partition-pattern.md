@@ -137,27 +137,34 @@ for the full relay chain treatment.
 
 ## Role 6: Fault handler
 
-When a sub-partition faults — by returning an error, panicking, timing out, missing a
-heartbeat, or disconnecting — the compositor catches the fault, adds diagnostic context
-(which partition, which layer, which operation), and responds (FPA-011).
+When a sub-partition faults during any lifecycle invocation — `init()`, `step()`,
+`shutdown()`, `contribute_state()`, or `load_state()` — by returning an error, panicking,
+or timing out, the compositor catches the fault, adds diagnostic context (which partition,
+which layer, which operation), and responds (FPA-011).
 
-The response follows a priority order:
+The response is:
 
-1. **Propagate.** Return an error from the compositor's own lifecycle method, cascading
-   through the compositor chain to the orchestrator. This is the default when no fallback
-   is configured.
-2. **Fallback.** If a fallback implementation is configured for the faulting partition,
-   switch to it, log the fault and fallback activation, and continue processing. The
+1. **Fallback.** If a fallback implementation is configured for the faulting partition,
+   the compositor activates it, logs the fault and fallback activation, and continues
+   processing. The fallback must have the same partition identity as the primary. The
    outer layer does not see an error, but the fault is recorded.
+2. **Propagate.** If no fallback is configured, the compositor returns an error from its
+   own lifecycle method call, cascading through the compositor chain to the orchestrator.
+   The compositor transitions to Error state before returning.
+
+The compositor enforces per-invocation elapsed-time deadlines for all lifecycle calls.
+Default values are 50 ms for step/contribute_state and 500 ms for
+init/load_state/shutdown; domains configure values appropriate to their constraints.
+Deadline enforcement cannot be disabled.
 
 The fault detection mechanism varies by execution strategy. Under direct invocation, the
-compositor catches errors and panics from the call itself, and enforces per-invocation
-timeouts. Under supervisory coordination, the compositor detects faults through heartbeat
-monitoring, connection state, or error messages on the bus. The fault handling policy is
-the same regardless of detection mechanism — only the detection latency differs.
+compositor catches errors and panics from the call itself and enforces deadlines. Under
+supervisory coordination, the compositor detects faults through heartbeat monitoring,
+connection state, or error messages on the bus. The fault handling policy is the same
+regardless of detection mechanism — only the detection latency differs.
 
 The compositor never silently absorbs a fault. Every fault is logged with full diagnostic
-context, and the compositor either propagates it or activates a configured fallback.
+context, and the compositor either activates a configured fallback or propagates the error.
 There is no third option.
 
 ## Role 7: Partition on the outer layer
@@ -192,15 +199,15 @@ compositor at the boundary translates.
 
 When the inner strategy produces output asynchronously, the compositor's output may
 reflect previously computed state rather than state computed for the current invocation.
-The compositor communicates this through **freshness metadata** — information accompanying
-its output that indicates whether the data was freshly computed or carried forward. The
-freshness representation (cycle identifier, timestamp, staleness flag, age metric) is
-defined in the contract crate alongside the output type.
+The compositor communicates this through the **StateContribution** envelope — a wrapper
+defined in the contract crate that wraps all `contribute_state()` output with freshness
+metadata: the `state` itself, a `fresh` flag indicating whether it was computed for the
+current invocation, and an `age_ms` field indicating how stale the data is.
 
 Consumers read the freshness metadata and decide how to handle stale data — proceed
 normally, interpolate, or flag a degraded condition. Under uniform lock-step execution,
-freshness is trivially "fresh" every cycle and the metadata may be omitted or always set
-to fresh. It becomes meaningful at layer boundaries where strategies diverge.
+freshness is trivially "fresh" every cycle. It becomes meaningful at layer boundaries
+where strategies diverge.
 
 See
 [Execution Strategies in the Fractal Partition Pattern](execution-strategies-in-the-fractal-partition-pattern.md)

@@ -70,7 +70,7 @@ distinguished by purpose.
 
 The compositor drives execution by calling trait methods on each partition:
 
-- `init(config)` — initialize with configuration derived from composition fragments
+- `init()` — initialize the partition (configuration is handled at construction time)
 - `step(dt)` — advance one timestep
 - `shutdown()` — clean up resources
 - `contribute_state()` — request a state snapshot contribution
@@ -369,20 +369,30 @@ a bus concern. There is no fault-specific infrastructure.
 Fault handling is one of several compositor roles described in
 [The Compositor in the Fractal Partition Pattern](the-compositor-in-the-fractal-partition-pattern.md).
 
-When a sub-partition faults (detected via a failed call, a missed heartbeat, or a
-disconnection depending on the execution strategy), the compositor decides the response:
+When a sub-partition faults during any lifecycle invocation — including `step()`,
+`init()`, `shutdown()`, `contribute_state()`, and `load_state()` — detected via a
+returned error, a panic, or a timeout, the compositor responds in one of two ways:
 
-- **Emit a stop request.** The compositor emits a stop request on its bus (which may
-  then be relayed to the outer layer through the normal relay chain). The outer layer
-  sees a stop request from the partition, not a raw fault from a sub-partition.
+- **Propagate.** The compositor returns an error from its own trait method call,
+  which cascades through the compositor chain until the orchestrator receives it.
+  The error includes context identifying the faulting sub-partition's identity, layer
+  depth, and the operation that faulted. The compositor transitions to Error state
+  before returning. This is the default when no fallback is configured.
 
-- **Fall back.** If an alternative implementation is available, the compositor might
-  switch to it and continue execution. The outer layer never knows the primary
+- **Fallback.** If a fallback implementation is configured for the faulting
+  sub-partition, the compositor activates it, logs the fault and fallback activation,
+  and continues processing without returning an error. The fallback must have the same
+  partition identity as the primary. The outer layer never knows the primary
   implementation faulted.
 
-- **Log and continue.** For non-fatal errors — a sub-partition reporting a degraded
-  result, a recoverable timeout — the compositor may log the fault and proceed. The
-  outer layer sees no change in behavior.
+There is no "log and continue" option — the compositor must either propagate or
+activate a fallback. Domain-specific systems that want fail-fast behavior simply
+do not configure fallbacks.
+
+The compositor enforces per-invocation elapsed-time deadlines for all lifecycle calls.
+Default values are 50 ms for step/contribute_state and 500 ms for
+init/load_state/shutdown. Domains configure values appropriate to their timing
+constraints. Deadline enforcement cannot be disabled.
 
 ### Why faults are not a bus concern
 
@@ -392,15 +402,10 @@ unnecessary because:
 
 - The compositor already has a direct call-and-return relationship with its
   sub-partitions. It catches errors from `step()` as a normal part of execution.
-- The compositor's response to a fault is a domain decision (stop? fall back? continue?),
-  not a routing decision. It belongs in the compositor's logic, not in bus infrastructure.
-- The outer layer should see the compositor's *decision*, not the raw fault. This is the
-  same encapsulation principle that governs relay authority.
-
-If richer fault context is needed at the outer layer — for diagnostics, logging, or
-operator display — the compositor can include fault details in the payload of its stop
-request or publish a diagnostic message on the outer bus. The mechanism is the existing
-typed message system, not a new fault channel.
+- The compositor's response to a fault is either error propagation via the return path
+  or fallback activation. It belongs in the compositor's logic, not in bus infrastructure.
+- The outer layer should see the compositor's error return, not the raw fault. This is
+  the same encapsulation principle that governs relay authority.
 
 ## Design choices and tradeoffs
 

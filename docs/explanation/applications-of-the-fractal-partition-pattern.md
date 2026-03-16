@@ -16,10 +16,13 @@ The fractal partition pattern is not a domain-specific architecture. It is a str
 discipline that, when applied, produces a system with a specific set of emergent
 properties. These properties are not features that need to be designed and maintained
 independently — they fall out of the pattern's core constraint: the same structural
-primitives (contracts, compositors, events, composition fragments) apply identically at
-every layer of decomposition.
+primitives (contracts, events, configuration, composition, specification, documentation
+structure, and testing structure) apply identically at every layer of decomposition.
 
-Five properties define the class of system that results.
+Five properties define the class of system that results. These are representative, not
+exhaustive — additional emergent properties include configurable fault tolerance
+(FPA-011), safety-critical signal bypass (FPA-013), and declarative event-driven
+behavior (FPA-024 through FPA-029).
 
 ### Distributable execution
 
@@ -44,8 +47,9 @@ conforms to a contract defined at its layer. Any implementation that satisfies t
 contract can be substituted without modifying any peer partition's source code.
 
 The compositor at each layer selects and assembles partition implementations at startup
-based on composition fragments. Changing which implementation is active requires only
-a configuration change. The same mechanism works at every scale: swapping a top-level
+based on composition fragments, then coordinates their lifecycle at runtime — owning
+the layer's bus, arbitrating requests, relaying inter-layer messages, and handling
+faults. Changing which implementation is active requires only a configuration change. The same mechanism works at every scale: swapping a top-level
 subsystem, swapping a sub-component within a subsystem, or swapping a sub-sub-component
 three layers deep.
 

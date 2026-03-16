@@ -90,8 +90,10 @@ independent of any specific partition's numerical output:
 
 - **Message delivery**: partition A sends a message on channel X, partition B receives
   it in the same tick (or next tick, per the contract).
-- **Conservation**: the sum of energy (or mass, or momentum) across all partition
-  boundaries is preserved within stated tolerances.
+- **Conservation**: structural invariants are preserved — e.g., the number of
+  partitions is conserved across ticks, the write buffer has exactly one entry per
+  partition. Domain-level conservation (energy, mass, momentum) across partition
+  boundaries is a future concern that reference domains would exercise.
 - **Ordering**: execution order respects the declared dependency graph — partition A runs
   before partition B, which runs before partition C.
 - **Visibility**: state that one partition publishes is visible to its declared consumers

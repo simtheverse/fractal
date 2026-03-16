@@ -54,9 +54,9 @@ from each other.
 ## Typed messages
 
 All data crossing partition boundaries travels as instances of named, versioned message
-types declared in the contract crate. `PartitionOutput`, `CommandMessage`, `EnvState`,
-`SharedContext` — these are concrete structs with documented fields, statically checked
-by the compiler.
+types declared in the contract crate. `SharedContext`, `TransitionRequest`,
+`DumpRequest`, `LoadRequest` — these are concrete structs with documented fields,
+statically checked by the compiler.
 
 The alternative — untyped byte buffers, serialized JSON, or dynamic payloads — trades
 compile-time safety for flexibility that the system doesn't need. Partitions exchange a
@@ -121,8 +121,8 @@ The bus-mediated request pattern has several properties:
 
 - **Conflict resolution.** When two partitions request conflicting transitions in the
   same tick — one requests pause, another requests stop — the owner applies a
-  deterministic priority rule (stop beats pause beats resume) rather than letting the
-  outcome depend on message ordering.
+  deterministic, transport-independent priority rule defined by the domain-specific
+  specification, rather than letting the outcome depend on message ordering.
 
 - **Partition ignorance.** A partition emitting a request doesn't need to know who the
   owner is, how many other partitions exist, or what other requests are in flight. It
@@ -136,8 +136,9 @@ are defined in the contract crate, not in any partition. One owner holds the
 authoritative value. All other partitions observe it as read-only. Transitions happen
 through bus requests.
 
-The execution state machine (Idle → Running → Paused → Stopped) is the primary instance
-of this pattern at layer 0. But the pattern is general. At layer 1, sub-partitions
+The execution state machine (Uninitialized → Initializing → Running → Paused →
+ShuttingDown → Terminated, with Error reachable from multiple states) is the primary
+instance of this pattern at layer 0. But the pattern is general. At layer 1, sub-partitions
 within partition B might coordinate around a domain-specific phase state machine
 (phase 1 → phase 2 → phase 3 → phase 4) defined in partition B's contract module. The
 mechanism is identical: type in the contract module, single owner, bus-mediated
@@ -175,9 +176,9 @@ configuration interface.
 
 Multi-entity systems require each entity's partitions to be aware of peer entities.
 Rather than having partitions query each other — which would create lateral coupling —
-the system publishes an aggregated `SharedContext` each tick containing the
-`PartitionOutput` of all active entities. Every partition receives the same
-`SharedContext` through the bus.
+the compositor publishes an aggregated `SharedContext` each tick containing the
+aggregated partition state, tick metadata, and execution state. Every partition receives
+the same `SharedContext` through the bus.
 
 This is a broadcast pattern: one publisher (the orchestrator), many consumers, no
 consumer-specific channels. A partition B plugin coordinating with peers reads their

@@ -135,7 +135,7 @@ A single partition can use actions from multiple contract crates in its event de
 limited to crates in its dependency graph. Partition A might define:
 
 ```toml
-# Action from Partition A's contract crate: inject a fault at scenario time T+60s
+# Action from Partition A's contract crate: inject a fault at logical time T+60s
 [[partition_a.events]]
 trigger = { time = 60.0 }
 action = "inject_fault"
@@ -152,18 +152,22 @@ identifier against the contract crates in scope, finds the declared handler, and
 it. The scenario author does not need to know which contract crate declares an action —
 the schema is the same, and validation catches invalid identifiers at load time.
 
-When multiple events fire in the same tick, ordering follows the event system's
-evaluation semantics. Actions whose handlers emit bus messages interact with the
-arbitration mechanisms already defined (FPA-006 for shared state machine conflicts).
-Actions whose handlers modify internal state take effect in the order the event
-dispatcher evaluates them.
+When multiple events fire in the same tick, the event engine first evaluates all
+conditions against the pre-step state snapshot, collecting the set of fired events.
+Then the compositor applies the triggered actions in TOML declaration order via
+action handlers. This two-step model preserves snapshot semantics: no action's side
+effects are visible to other event conditions in the same evaluation pass. Actions
+whose handlers emit bus messages interact with the arbitration mechanisms already
+defined (FPA-006 for shared state machine conflicts).
 
 ## Time semantics across layers
 
 FPA-025 establishes that time-triggered events use different time references at
-different layers: wall-clock at layer 0, scenario time at layer 1. This applies to all
+different layers: wall-clock at layer 0, logical time at layer 1. Logical time is
+tracked as the cumulative sum of `dt` values passed to the compositor's step invocations,
+not derived from tick count multiplied by the current `dt`. This applies to all
 actions regardless of which contract crate declares them. An action from the system core
-used in a layer 1 event triggers on scenario time. The same action used in a layer 0
+used in a layer 1 event triggers on logical time. The same action used in a layer 0
 event triggers on wall-clock time. The time reference is a property of the layer, not of
 the action or its declaring contract crate.
 
