@@ -160,9 +160,13 @@ supervisory coordination, the compositor detects faults through heartbeat monito
 connection state, or error messages on the bus. The fault handling policy is the same
 regardless of detection mechanism — only the detection latency differs.
 
-The compositor never silently absorbs a fault. Every fault is logged with full diagnostic
-context and propagated. Recovery from faults — such as activating a fallback or retrying —
-is the responsibility of the partition itself or the orchestrator.
+The compositor never silently absorbs a fault. Every fault is detected and enriched with
+full diagnostic context. Faults during active lifecycle operations are propagated to the
+outer layer. The one exception is despawn shutdown: when a partition is being removed, a
+shutdown fault is recorded as a non-fatal warning rather than propagated, because the
+partition is already gone from the active composition. Recovery from faults — such as
+activating a fallback or retrying — is the responsibility of the partition itself or the
+orchestrator.
 
 ## Role 7: Partition on the outer layer
 

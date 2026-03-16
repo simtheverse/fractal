@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use fpa_bus::InProcessBus;
-use fpa_compositor::compositor::Compositor;
+use fpa_compositor::compositor::{Compositor, LifecycleOp};
 use fpa_compositor::state_machine::ExecutionState;
 use fpa_contract::{Partition, PartitionError};
 
@@ -492,5 +492,74 @@ fn error_during_init_includes_operation_context() {
         "error should contain original message: {}",
         err.message
     );
+}
+
+// --- Despawn shutdown warning tests (FPA-011 despawn exception) ---
+
+/// Despawn of a partition that fails shutdown records a lifecycle warning
+/// rather than propagating the error.
+#[test]
+fn despawn_shutdown_error_recorded_as_warning() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(FailingPartition::new("failer", "shutdown")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    compositor.init().unwrap();
+    compositor.request_lifecycle_op(LifecycleOp::Despawn("failer".to_string()));
+
+    // Tick should succeed — despawn shutdown errors don't propagate
+    let result = compositor.run_tick(1.0);
+    assert!(result.is_ok(), "despawn shutdown failure should not fail the tick");
+
+    // The error should be available as a lifecycle warning
+    let warnings = compositor.drain_lifecycle_warnings();
+    assert_eq!(warnings.len(), 1, "should have one lifecycle warning");
+    assert_eq!(warnings[0].partition_id, "failer");
+    assert_eq!(warnings[0].operation, "shutdown");
+}
+
+/// Despawn of a partition that panics during shutdown records a lifecycle
+/// warning rather than crashing the compositor.
+#[test]
+fn despawn_shutdown_panic_recorded_as_warning() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(PanickingPartition::on("panicker", "shutdown")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    compositor.init().unwrap();
+    compositor.request_lifecycle_op(LifecycleOp::Despawn("panicker".to_string()));
+
+    let result = compositor.run_tick(1.0);
+    assert!(result.is_ok(), "despawn shutdown panic should not fail the tick");
+
+    let warnings = compositor.drain_lifecycle_warnings();
+    assert_eq!(warnings.len(), 1, "should have one lifecycle warning");
+    assert_eq!(warnings[0].partition_id, "panicker");
+    assert!(
+        warnings[0].message.contains("panic"),
+        "warning should mention panic: {}",
+        warnings[0].message
+    );
+}
+
+/// Successful despawn produces no lifecycle warnings.
+#[test]
+fn despawn_clean_shutdown_no_warnings() {
+    let partitions: Vec<Box<dyn Partition>> = vec![
+        Box::new(fpa_contract::test_support::Counter::new("clean")),
+    ];
+    let bus = InProcessBus::new("test-bus");
+    let mut compositor = Compositor::new(partitions, Arc::new(bus));
+
+    compositor.init().unwrap();
+    compositor.request_lifecycle_op(LifecycleOp::Despawn("clean".to_string()));
+    compositor.run_tick(1.0).unwrap();
+
+    let warnings = compositor.drain_lifecycle_warnings();
+    assert!(warnings.is_empty(), "clean despawn should produce no warnings");
 }
 

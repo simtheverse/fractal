@@ -380,9 +380,12 @@ compositor chain until the orchestrator receives it. The error includes context
 identifying the faulting sub-partition's identity, layer depth, and the operation that
 faulted. The compositor transitions to Error state before returning.
 
-The compositor's fault handling responsibility is detect, enrich, propagate. Recovery
-from faults — such as activating a fallback implementation or retrying — is the
-responsibility of the partition itself or the orchestrator, not the compositor.
+The compositor's fault handling responsibility is detect, enrich, propagate. The one
+exception is despawn shutdown: when a partition is being removed, a shutdown fault is
+recorded as a non-fatal warning rather than propagated, because the partition is already
+gone from the active composition (analogous to Drop semantics). Recovery from faults —
+such as activating a fallback implementation or retrying — is the responsibility of the
+partition itself or the orchestrator, not the compositor.
 
 The compositor enforces per-invocation elapsed-time deadlines for all lifecycle calls.
 Default values are 50 ms for step/contribute_state and 500 ms for

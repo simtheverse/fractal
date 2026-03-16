@@ -616,9 +616,15 @@ timeout exactly as a fault equivalent to an error return or panic. The error sha
 include the compositor's context (which sub-partition faulted, during which operation)
 but the failure itself shall not be silently suppressed. The compositor shall propagate
 the error to the outer layer by returning an error from its own trait method call, which
-cascades through the compositor chain until the orchestrator receives it. There shall be
-no fault-specific bus channel or message type; the compositor's error return from its own
-trait call is the propagation mechanism.
+cascades through the compositor chain until the orchestrator receives it.
+The one exception is despawn shutdown: when a partition is being removed via a despawn
+lifecycle operation, the partition is already removed from the active composition before
+shutdown is attempted. A shutdown fault during despawn shall be detected and enriched with
+compositor context, but shall not be propagated — it is recorded as a non-fatal lifecycle
+warning available for caller inspection. The despawn proceeds regardless, analogous to
+Drop semantics where cleanup failures are tolerated.
+There shall be no fault-specific bus channel or message type; the compositor's error
+return from its own trait call is the propagation mechanism for faults that are propagated.
 
 The compositor shall invoke all sub-partition lifecycle methods through fault-handling
 wrappers that catch panics, enforce per-invocation deadlines, and enrich errors with

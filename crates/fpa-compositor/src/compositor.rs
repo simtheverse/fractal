@@ -85,6 +85,10 @@ pub struct Compositor {
     last_dump_result: Option<toml::Value>,
     /// Pending load request for Phase 1 processing (FPA-014, FPA-023).
     pending_load: Option<toml::Value>,
+    /// Non-fatal errors from best-effort operations (e.g., despawn shutdown).
+    /// These are detected and enriched per FPA-011 but not propagated because
+    /// the faulting partition is no longer part of the active composition.
+    lifecycle_warnings: Vec<PartitionError>,
     /// Bus reader for transition requests (FPA-006).
     transition_reader: TypedReader<TransitionRequest>,
     /// Bus reader for dump requests (FPA-023).
@@ -139,6 +143,7 @@ impl Compositor {
             pending_dump: false,
             last_dump_result: None,
             pending_load: None,
+            lifecycle_warnings: Vec::new(),
             transition_reader,
             dump_reader,
             load_reader,
@@ -362,6 +367,16 @@ impl Compositor {
     /// Queue a lifecycle operation for processing in the next tick's Phase 1 (FPA-014).
     pub fn request_lifecycle_op(&mut self, op: LifecycleOp) {
         self.pending_lifecycle_ops.push(op);
+    }
+
+    /// Drain and return non-fatal lifecycle warnings (FPA-011).
+    ///
+    /// Lifecycle warnings are errors from best-effort operations like despawn
+    /// shutdown. They are detected and enriched with compositor context but not
+    /// propagated because the faulting partition is no longer part of the active
+    /// composition. Callers should inspect these after each tick.
+    pub fn drain_lifecycle_warnings(&mut self) -> Vec<PartitionError> {
+        std::mem::take(&mut self.lifecycle_warnings)
     }
 
     /// Queue a dump request for processing in the next tick's Phase 1 (FPA-014, FPA-023).
@@ -597,12 +612,14 @@ impl Compositor {
                 LifecycleOp::Despawn(id) => {
                     if let Some(pos) = self.partitions.iter().position(|p| p.id() == id) {
                         let mut removed = self.partitions.remove(pos);
-                        // Shutdown error is intentionally discarded: the partition
-                        // is being removed regardless, similar to Drop semantics.
-                        // A failing shutdown should not prevent despawn or poison
-                        // the compositor — the partition is already gone from the
-                        // active set by this point.
-                        let _ = fault::safe_shutdown(removed.as_mut(), &self.timeout_config);
+                        // Despawn shutdown is best-effort: the partition is already
+                        // removed from the active set, so a failing shutdown should
+                        // not prevent despawn or poison the compositor. The error is
+                        // recorded as a lifecycle warning for observability (FPA-011).
+                        let result = fault::safe_shutdown(removed.as_mut(), &self.timeout_config);
+                        if let Err(e) = result.into_result() {
+                            self.lifecycle_warnings.push(e.with_layer_depth(self.layer_depth));
+                        }
                     }
                 }
             }
