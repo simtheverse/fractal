@@ -615,15 +615,19 @@ responsible for enforcing these deadlines for its sub-partitions and for treatin
 timeout exactly as a fault equivalent to an error return or panic. The error shall
 include the compositor's context (which sub-partition faulted, during which operation)
 but the failure itself shall not be silently suppressed. The compositor shall respond to
-a fault in one of the following ways, in order of preference: (1) propagate the error to
-the outer layer by returning an error from the compositor's own trait method call, which
-cascades through the compositor chain until the orchestrator receives it; or (2) if a
-fallback implementation is configured for the faulting sub-partition, switch to the
-fallback, log the fault and the fallback activation, and continue processing — the
-compositor does not return an error to the outer layer in this case, but the fault and
-fallback are recorded in the compositor's diagnostic log. If no fallback is configured,
-the compositor shall always propagate the error (option 1). There shall be no
-fault-specific bus channel or message type; the compositor's error return from its own
+a fault as follows: if the fault occurs during steady-state processing (currently
+`step()`) and a fallback implementation is configured for the faulting sub-partition,
+the compositor activates the fallback, logs the fault and fallback activation, and
+continues processing — the compositor does not return an error to the outer layer in
+this case, but the fault and fallback are recorded in the compositor's diagnostic log.
+In all other cases — faults during `init()`, `shutdown()`, `contribute_state()`, or
+`load_state()`, or any fault when no fallback is configured — the compositor propagates
+the error to the outer layer by returning an error from its own trait method call, which
+cascades through the compositor chain until the orchestrator receives it. Faults during
+lifecycle transitions (init, shutdown) and state operations (contribute_state, load_state)
+always propagate because a fallback that has not been executing cannot provide coherent
+state or complete a lifecycle transition on behalf of the faulted primary. There shall be
+no fault-specific bus channel or message type; the compositor's error return from its own
 trait call is the propagation mechanism when errors are propagated.
 
 The compositor shall invoke all sub-partition lifecycle methods through fault-handling

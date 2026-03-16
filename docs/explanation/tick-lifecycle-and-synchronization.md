@@ -59,6 +59,8 @@ Under the tick lifecycle convention, every compositor — at every layer — exe
  │  │   step(dt)                              │  │
  │  │   write to write buffer                 │  │
  │  │   check direct signals                  │  │
+ │  │ end for                                 │  │
+ │  │                                         │  │
  │  │ ── tick barrier ──                      │  │
  │  │ Assemble shared context from tick N     │  │
  │  │   partition outputs (write buffer)      │  │
@@ -224,8 +226,10 @@ runtime role (FPA-009) with precise timing semantics. It integrates with:
   Dump requests processed in Phase 1 invoke `contribute_state()` using
   post-tick-N-1 state.
 - **Compositor fault handling** (FPA-011): Faults during any lifecycle invocation in any
-  phase are caught by the compositor, wrapped with diagnostic context, and propagated
-  upward — the compositor does not silently absorb failures.
+  phase are caught by the compositor and wrapped with diagnostic context. For faults
+  during steady-state processing (`step()`), a configured fallback is activated if
+  available; all other faults propagate upward. The compositor does not silently absorb
+  failures.
 - **Transport abstraction** (FPA-004): The tick lifecycle is one mechanism that
   makes the transport independence guarantee enforceable for tick-based systems —
   by isolating partitions from each other's current-tick outputs, the result

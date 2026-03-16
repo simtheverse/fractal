@@ -146,15 +146,21 @@ When a sub-partition faults during any lifecycle invocation — `init()`, `step(
 or timing out, the compositor catches the fault, adds diagnostic context (which partition,
 which layer, which operation), and responds (FPA-011).
 
-The response is:
+The response depends on what faulted:
 
-1. **Fallback.** If a fallback implementation is configured for the faulting partition,
-   the compositor activates it, logs the fault and fallback activation, and continues
-   processing. The fallback must have the same partition identity as the primary. The
-   outer layer does not see an error, but the fault is recorded.
-2. **Propagate.** If no fallback is configured, the compositor returns an error from its
-   own lifecycle method call, cascading through the compositor chain to the orchestrator.
-   The compositor transitions to Error state before returning.
+- **Steady-state processing faults** (currently `step()`): If a fallback implementation
+  is configured for the faulting partition, the compositor activates it, logs the fault
+  and fallback activation, and continues processing. The fallback must have the same
+  partition identity as the primary. The outer layer does not see an error, but the fault
+  is recorded. If no fallback is configured, the compositor propagates the error.
+- **All other faults** (`init()`, `shutdown()`, `contribute_state()`, `load_state()`):
+  The compositor always propagates the error to the outer layer, regardless of fallback
+  configuration. A fallback that has not been executing cannot provide coherent state or
+  complete a lifecycle transition on behalf of the faulted primary.
+
+When propagating, the compositor returns an error from its own lifecycle method call,
+cascading through the compositor chain to the orchestrator. The compositor transitions
+to Error state before returning.
 
 The compositor enforces per-invocation elapsed-time deadlines for all lifecycle calls.
 Default values are 50 ms for step/contribute_state and 500 ms for

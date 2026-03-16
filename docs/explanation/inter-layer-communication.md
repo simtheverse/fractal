@@ -376,19 +376,26 @@ Fault handling is one of several compositor roles described in
 
 When a sub-partition faults during any lifecycle invocation — including `step()`,
 `init()`, `shutdown()`, `contribute_state()`, and `load_state()` — detected via a
-returned error, a panic, or a timeout, the compositor responds in one of two ways:
+returned error, a panic, or a timeout, the compositor responds based on what faulted:
 
-- **Propagate.** The compositor returns an error from its own trait method call,
-  which cascades through the compositor chain until the orchestrator receives it.
-  The error includes context identifying the faulting sub-partition's identity, layer
-  depth, and the operation that faulted. The compositor transitions to Error state
-  before returning. This is the default when no fallback is configured.
+- **Steady-state processing faults** (currently `step()`): If a fallback implementation
+  is configured for the faulting sub-partition, the compositor activates it, logs the
+  fault and fallback activation, and continues processing without returning an error.
+  The fallback must have the same partition identity as the primary. The outer layer
+  never knows the primary implementation faulted. If no fallback is configured, the
+  compositor propagates the error.
 
-- **Fallback.** If a fallback implementation is configured for the faulting
-  sub-partition, the compositor activates it, logs the fault and fallback activation,
-  and continues processing without returning an error. The fallback must have the same
-  partition identity as the primary. The outer layer never knows the primary
-  implementation faulted.
+- **Lifecycle transition and state operation faults** (`init()`, `shutdown()`,
+  `contribute_state()`, `load_state()`): The compositor always propagates the error,
+  regardless of fallback configuration. A fallback that has not been executing cannot
+  provide coherent state or complete a lifecycle transition on behalf of the faulted
+  primary.
+
+When propagating, the compositor returns an error from its own trait method call,
+which cascades through the compositor chain until the orchestrator receives it.
+The error includes context identifying the faulting sub-partition's identity, layer
+depth, and the operation that faulted. The compositor transitions to Error state
+before returning.
 
 There is no "log and continue" option — the compositor must either propagate or
 activate a fallback. Domain-specific systems that want fail-fast behavior simply
