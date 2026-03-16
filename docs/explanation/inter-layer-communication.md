@@ -230,21 +230,26 @@ exceeds the cost of breaking layer encapsulation.
 ### How direct signals work
 
 Direct signal types are declared in a contract crate. Any partition within that contract
-crate's hierarchy can emit a declared direct signal. The signal bypasses all intermediate
-bus instances within the hierarchy and reaches the declaring crate's orchestrator
-directly.
+crate's hierarchy can emit a declared direct signal. The signal bypasses the bus relay
+chain — it is not a bus message and is not subject to relay authority (FPA-010). Instead,
+each compositor collects direct signals from its inner compositors and filters them
+against its own signal registry.
 
 ```
 Layer 2 sub-partition emits DirectSignal::EmergencyStop
-  → bypasses layer 2 bus
-  → bypasses layer 1 bus
-  → reaches system orchestrator directly
+  → layer 2 compositor collects signal (bypasses layer 2 bus)
+  → layer 1 compositor collects signal, filters against its registry
+  → layer 0 orchestrator collects signal, filters against its registry
   → orchestrator applies emergency response
 ```
 
-The mechanism for bypass is implementation-specific — it might be a separate channel, a
-shared atomic, or a direct callback registered during initialization. The key property
-is that no compositor in the chain can intercept or suppress it.
+Each compositor maintains a signal registry defining which direct signal types are
+recognized at its layer. When collecting signals from inner compositors, the outer
+compositor filters against its own registry — only signals whose type identifier is
+registered at the outer layer propagate. Unregistered signals are silently dropped at
+the boundary. The key property is that signals bypass bus relay authority: no compositor
+can suppress a registered signal through relay policy the way it can suppress a bus
+message.
 
 ### Direct signals are hierarchy-scoped
 
