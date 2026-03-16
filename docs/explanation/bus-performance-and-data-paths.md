@@ -16,8 +16,11 @@ state. The buffer swap at the start of each tick makes the previous tick's
 writes available for reading.
 
 This path is:
-- **Direct memory access** — no allocation, no serialization, no bus involvement.
-- **Zero overhead per message** — the compositor writes to a pre-allocated slot.
+- **Low overhead** — uses a pre-keyed `HashMap<String, toml::Value>`, avoiding
+  per-subscriber cloning and type erasure. No bus involvement.
+- **One insert per partition per tick** — the compositor inserts each partition's
+  contributed state into the write buffer after stepping. The write buffer is
+  cleared on each swap.
 - **Deterministic** — step order does not affect results because readers always
   see the previous tick's state.
 
