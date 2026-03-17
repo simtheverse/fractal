@@ -101,9 +101,10 @@ A sub-partition at layer 1 never publishes directly to the layer 0 bus. Normal r
 travel through the compositor relay chain — the layer 1 compositor receives a request on
 the layer 1 bus, decides to relay, and emits on the layer 0 bus. Each compositor in the
 chain can intercept, transform, or suppress. Safety-critical signals use the direct
-signal mechanism (FPA-013), which bypasses the relay chain within the declaring contract
+signal mechanism (FPA-013), which bypasses bus relay policy within the declaring contract
 crate's hierarchy — these exist for scenarios where compositor suppression would be
-unsafe.
+unsafe. Each compositor still filters direct signals against its own signal registry;
+unregistered signal types are dropped at the layer boundary.
 
 This scoping preserves encapsulation: the outer layer sees its partitions as opaque
 units. It does not know — and cannot depend on — the internal structure of any partition.

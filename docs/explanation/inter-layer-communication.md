@@ -400,7 +400,7 @@ unnecessary because:
 
 - The compositor already has a direct call-and-return relationship with its
   sub-partitions. It catches errors from `step()` as a normal part of execution.
-- The compositor's response to a fault is either error propagation via the return path
+- The compositor's response to a fault is error propagation via the return path.
   It belongs in the compositor's logic, not in bus infrastructure.
 - The outer layer should see the compositor's error return, not the raw fault. This is
   the same encapsulation principle that governs relay authority.

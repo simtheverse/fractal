@@ -20,7 +20,7 @@ primitives (contracts, events, configuration, composition, specification, docume
 structure, and testing structure) apply identically at every layer of decomposition.
 
 Five properties define the class of system that results. These are representative, not
-exhaustive — additional emergent properties include configurable fault tolerance
+exhaustive — additional emergent properties include fault detection and propagation
 (FPA-011), safety-critical signal bypass (FPA-013), and declarative event-driven
 behavior (FPA-024 through FPA-029).
 

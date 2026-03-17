@@ -104,8 +104,9 @@ traceability.
 ### System tests are relative to system scope
 
 The conventions document (FPA-CON-000) defines system tests (FPA-034) as tests that
-exercise the full stack within a system's scope boundary, and layer 0 is relative. Every system that applies the fractal partition
-pattern has its own layer 0, and therefore its own system tests.
+exercise the full stack within a system's scope boundary, and layer 0 is relative.
+Every system that applies the fractal partition pattern has its own layer 0, and
+therefore its own system tests.
 
 Consider a system called "inner-system" whose system tests exercise the full processing
 stack: configuration in, results out. They trace to inner-system's FPA requirements.
