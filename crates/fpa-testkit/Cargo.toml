@@ -10,3 +10,19 @@ fpa-compositor = { path = "../fpa-compositor" }
 fpa-config = { path = "../fpa-config" }
 toml = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+tokio = { workspace = true }
+
+[[bench]]
+name = "bench_tick"
+harness = false
+
+[[bench]]
+name = "bench_bus"
+harness = false
+
+[[bench]]
+name = "bench_buffer"
+harness = false
