@@ -5,16 +5,19 @@ performance characteristics.
 
 ## 6R.1 — Boilerplate Measurement
 
-| Task | LOC (approx) | Files touched |
-|------|-------------|---------------|
-| New partition (minimal, no bus) | ~70 | 1 (partition impl) |
-| New partition (bus-aware) | ~164 | 1 (partition impl) + message type |
-| New message type | ~15 | 1 (messages.rs) |
-| New layer (compositor-as-partition) | ~30 | 0 (inline setup) |
+All LOC values measured from source at test time.
+
+| Task | LOC (measured) | Files touched |
+|------|---------------|---------------|
+| New partition (minimal, no bus) | 70 | 1 (partition impl) |
+| New partition (bus-aware) | 145 | 1 (partition impl) + message type |
+| New message type | ~14 per type | 1 (messages.rs, 73 LOC for 5 types) |
+| New layer (compositor-as-partition) | ~30 | 0 (inline setup in 112-line nesting test) |
 
 Boilerplate is dominated by the `Partition` trait's five required methods
 (`id`, `init`, `step`, `shutdown`, `contribute_state`) plus the optional
-`load_state`. Bus-aware partitions add subscription setup but no new concepts.
+`load_state`. Bus-aware partitions add subscription setup and state serialization
+for bus-specific fields but introduce no new concepts.
 
 ## 6R.2 — Performance Benchmarks
 
@@ -30,6 +33,7 @@ Run with `cargo bench -p fpa-testkit`:
 
 ### Buffer swap (bench_buffer)
 - DoubleBuffer swap + refill cost at 10, 100, 1000 partitions
+- Keys pre-computed to isolate buffer operations from allocation
 
 ## 6R.3 — Fractal Uniformity
 
@@ -47,17 +51,22 @@ layer of nesting.
 
 ## Findings
 
-1. **Boilerplate is reasonable** — ~70 LOC for a minimal partition is competitive
-   with trait-based frameworks. The `contribute_state`/`load_state` pair adds
-   serialization boilerplate that could be reduced with a derive macro.
+1. **Boilerplate is reasonable** — 70 LOC for a minimal partition is competitive
+   with trait-based frameworks. The `contribute_state`/`load_state` pair accounts
+   for roughly half the boilerplate (TOML serialization). A derive macro could
+   reduce this significantly.
 
-2. **Message types are lightweight** — ~15 LOC per message type (struct + Message impl).
-   A derive macro could reduce this to ~5 LOC.
+2. **Bus-aware partitions cost ~2x minimal** — 145 LOC for Sensor vs 70 for Counter.
+   The additional cost comes from subscription setup, message publishing, and
+   bus-specific state fields — not from new concepts.
 
-3. **Fractal nesting adds zero new concepts** — The compositor-as-partition pattern
+3. **Message types are lightweight** — 14 LOC per message type (struct + Message impl
+   + doc comment). A derive macro could reduce this to ~5 LOC.
+
+4. **Fractal nesting adds zero new concepts** — The compositor-as-partition pattern
    requires no additional API surface. Layer depth is metadata, not a structural change.
 
-4. **Performance baselines established** — Benchmark suite provides regression
+5. **Performance baselines established** — Benchmark suite provides regression
    detection for tick overhead, bus throughput, and buffer swap cost.
 
 ## Recommendations

@@ -8,11 +8,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use fpa_bus::{AsyncBus, InProcessBus, NetworkBus};
+use fpa_bus::{AsyncBus, Bus, DeferredBus, InProcessBus, NetworkBus};
 use fpa_compositor::compositor::Compositor;
 use fpa_compositor::supervisory::{FreshnessEntry, SupervisoryCompositor};
-use fpa_contract::test_support::Counter;
+use fpa_contract::test_support::{Counter, SensorReading, TestCommand};
 use fpa_contract::{Partition, StateContribution};
+
+use fpa_testkit::test_partitions::{Follower, Recorder, Sensor};
 
 // ---------------------------------------------------------------------------
 // Helper: tolerance-based TOML comparison
@@ -25,7 +27,7 @@ fn states_equal_within_tolerance(a: &toml::Value, b: &toml::Value, tol: f64) -> 
                 && tb.keys().all(|k| ta.contains_key(k))
                 && ta.iter().all(|(k, va)| {
                     tb.get(k)
-                        .map_or(false, |vb| states_equal_within_tolerance(va, vb, tol))
+                        .is_some_and(|vb| states_equal_within_tolerance(va, vb, tol))
                 })
         }
         (toml::Value::Float(fa), toml::Value::Float(fb)) => (fa - fb).abs() <= tol,
@@ -62,29 +64,6 @@ async fn wait_for_output(
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helper: build a lock-step compositor with counters in a given order
-// ---------------------------------------------------------------------------
-
-fn make_compositor(ids: &[&str]) -> Compositor {
-    let partitions: Vec<Box<dyn Partition>> = ids
-        .iter()
-        .map(|id| Box::new(Counter::new(*id)) as Box<dyn Partition>)
-        .collect();
-    Compositor::new(partitions, Arc::new(InProcessBus::new("test")))
-}
-
-fn run_and_dump(ids: &[&str], ticks: u64, dt: f64) -> toml::Value {
-    let mut c = make_compositor(ids);
-    c.init().unwrap();
-    for _ in 0..ticks {
-        c.run_tick(dt).unwrap();
-    }
-    let state = c.dump().unwrap();
-    c.shutdown().unwrap();
-    state
 }
 
 // ===========================================================================
@@ -174,37 +153,120 @@ fn transport_comparison_all_three() {
     );
 }
 
+/// All three transports produce identical state for bus-communicating
+/// Sensor/Follower/Recorder partitions with DeferredBus over 10 ticks.
+///
+/// Unlike the Counter-only tests above, this exercises actual bus
+/// publish/subscribe across InProcess, Async, and Network transports.
+#[test]
+fn transport_equivalence_with_bus_communication() {
+    let tol = 1e-12;
+    let ticks = 10;
+
+    fn run_bus_pipeline(bus: Arc<dyn Bus>, ticks: u64) -> toml::Value {
+        let deferred = Arc::new(DeferredBus::new(bus));
+        let layer_bus: Arc<dyn Bus> = deferred.clone();
+        let partitions: Vec<Box<dyn Partition>> = vec![
+            Box::new(Sensor::new("sensor", layer_bus.clone(), 1.5, 0.0)),
+            Box::new(Follower::new("follower", layer_bus.clone(), 5.0)),
+            Box::new(Recorder::new("recorder", layer_bus.clone())),
+        ];
+        let mut compositor = Compositor::from_deferred_bus(partitions, deferred);
+        compositor.init().unwrap();
+        for _ in 0..ticks {
+            compositor.run_tick(1.0).unwrap();
+        }
+        let state = compositor.dump().unwrap();
+        compositor.shutdown().unwrap();
+        state
+    }
+
+    fn make_network_bus(id: &str) -> NetworkBus {
+        let bus = NetworkBus::new(id).with_framework_codecs();
+        bus.register_codec::<SensorReading>();
+        bus.register_codec::<TestCommand>();
+        bus
+    }
+
+    let state_ip = run_bus_pipeline(Arc::new(InProcessBus::new("ip")), ticks);
+    let state_async = run_bus_pipeline(Arc::new(AsyncBus::new("ab")), ticks);
+    let state_net = run_bus_pipeline(Arc::new(make_network_bus("nb")), ticks);
+
+    assert!(
+        states_equal_within_tolerance(&state_ip, &state_async, tol),
+        "InProcess vs Async mismatch with bus-communicating partitions"
+    );
+    assert!(
+        states_equal_within_tolerance(&state_async, &state_net, tol),
+        "Async vs Network mismatch with bus-communicating partitions"
+    );
+}
+
 // ===========================================================================
 // 6Q.2 — Tick-lifecycle determinism
 // ===========================================================================
 
-/// 1000 ticks with 10 different partition orderings all produce identical state.
-/// Counter partitions are order-independent: each steps its own count.
+/// All 6 permutations of bus-communicating [sensor, follower, recorder]
+/// produce identical partition state over 100 ticks with DeferredBus.
+///
+/// This is a stronger ordering-independence test than the Counter-only case
+/// because partitions actively publish and subscribe through the bus.
+/// DeferredBus ensures intra-tick isolation (FPA-014), making results
+/// identical regardless of stepping order.
 #[test]
-fn determinism_1000_ticks_10_orderings() {
-    let orderings: Vec<Vec<&str>> = vec![
-        vec!["a", "b", "c"],
-        vec!["a", "c", "b"],
-        vec!["b", "a", "c"],
-        vec!["b", "c", "a"],
-        vec!["c", "a", "b"],
-        vec!["c", "b", "a"],
-        // Repeat some for 10 total
-        vec!["a", "b", "c"],
-        vec!["c", "a", "b"],
-        vec!["b", "c", "a"],
-        vec!["a", "c", "b"],
+fn ordering_independence_bus_communicating_6_permutations() {
+    let orders: [(usize, usize, usize); 6] = [
+        (0, 1, 2), // sensor, follower, recorder
+        (0, 2, 1), // sensor, recorder, follower
+        (1, 0, 2), // follower, sensor, recorder
+        (1, 2, 0), // follower, recorder, sensor
+        (2, 0, 1), // recorder, sensor, follower
+        (2, 1, 0), // recorder, follower, sensor
     ];
+    let names = ["sensor", "follower", "recorder"];
 
-    let reference = run_and_dump(&orderings[0], 1000, 1.0);
+    let mut reference_state: Option<toml::Value> = None;
 
-    for (i, ordering) in orderings.iter().enumerate().skip(1) {
-        let state = run_and_dump(ordering, 1000, 1.0);
-        assert_eq!(
-            reference, state,
-            "Ordering {} ({:?}) produced different state than ordering 0",
-            i, ordering
-        );
+    for (pi, &(a, b, c)) in orders.iter().enumerate() {
+        let inner = Arc::new(InProcessBus::new("test"));
+        let deferred = Arc::new(DeferredBus::new(inner));
+        let bus: Arc<dyn Bus> = deferred.clone();
+
+        let make = |idx: usize| -> Box<dyn Partition> {
+            match idx {
+                0 => Box::new(Sensor::new("sensor", bus.clone(), 1.5, 0.0)),
+                1 => Box::new(Follower::new("follower", bus.clone(), 5.0)),
+                2 => Box::new(Recorder::new("recorder", bus.clone())),
+                _ => unreachable!(),
+            }
+        };
+        let partitions: Vec<Box<dyn Partition>> = vec![make(a), make(b), make(c)];
+        let mut compositor = Compositor::from_deferred_bus(partitions, deferred);
+
+        compositor.init().unwrap();
+        for _ in 0..100 {
+            compositor.run_tick(1.0).unwrap();
+        }
+
+        let state = compositor.dump().unwrap();
+        compositor.shutdown().unwrap();
+
+        let partitions_table = state.as_table().unwrap()["partitions"].as_table().unwrap();
+
+        if let Some(ref expected) = reference_state {
+            let expected_table = expected.as_table().unwrap()["partitions"].as_table().unwrap();
+            for name in &names {
+                let expected_sc = StateContribution::from_toml(&expected_table[*name]).unwrap();
+                let actual_sc = StateContribution::from_toml(&partitions_table[*name]).unwrap();
+                assert_eq!(
+                    expected_sc.state, actual_sc.state,
+                    "permutation {} [{}, {}, {}]: partition '{}' state differs from reference",
+                    pi, names[a], names[b], names[c], name,
+                );
+            }
+        } else {
+            reference_state = Some(state);
+        }
     }
 }
 

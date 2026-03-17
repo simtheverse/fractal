@@ -62,41 +62,40 @@ impl Partition for ScalingCounter {
     }
 
     fn contribute_state(&self) -> Result<toml::Value, PartitionError> {
-        let scaled = (self.count as f64 * self.scale) as i64;
+        let count = i64::try_from(self.count).map_err(|_| {
+            PartitionError::new(&self.id, "contribute_state", "count exceeds i64::MAX")
+        })?;
         let mut table = toml::map::Map::new();
-        table.insert("count".to_string(), toml::Value::Integer(scaled));
+        table.insert("count".to_string(), toml::Value::Integer(count));
         table.insert("scale".to_string(), toml::Value::Float(self.scale));
         Ok(toml::Value::Table(table))
     }
 
     fn load_state(&mut self, state: toml::Value) -> Result<(), PartitionError> {
-        if let Some(table) = state.as_table() {
-            let count = table
-                .get("count")
-                .and_then(|v| v.as_integer())
-                .ok_or_else(|| {
-                    PartitionError::new(&self.id, "load_state", "missing or invalid 'count'")
-                })?;
-            let scale = table
-                .get("scale")
-                .and_then(|v| v.as_float())
-                .ok_or_else(|| {
-                    PartitionError::new(&self.id, "load_state", "missing or invalid 'scale'")
-                })?;
-            self.scale = scale;
-            // Reverse the scaling to recover the raw count
-            self.count = if scale.abs() > f64::EPSILON {
-                (count as f64 / scale).round() as u64
-            } else {
-                0
-            };
-            return Ok(());
+        let table = state.as_table().ok_or_else(|| {
+            PartitionError::new(&self.id, "load_state", "expected table")
+        })?;
+        let count = table
+            .get("count")
+            .and_then(|v| v.as_integer())
+            .ok_or_else(|| {
+                PartitionError::new(&self.id, "load_state", "missing or invalid 'count'")
+            })?;
+        if count < 0 {
+            return Err(PartitionError::new(
+                &self.id,
+                "load_state",
+                "count is negative",
+            ));
         }
-        Err(PartitionError::new(
-            &self.id,
-            "load_state",
-            "invalid state format",
-        ))
+        self.count = count as u64;
+        self.scale = table
+            .get("scale")
+            .and_then(|v| v.as_float())
+            .ok_or_else(|| {
+                PartitionError::new(&self.id, "load_state", "missing or invalid 'scale'")
+            })?;
+        Ok(())
     }
 }
 
@@ -187,9 +186,25 @@ fn swap_no_peer_source_changes() {
 /// Metrics for the ScalingCounter swap experiment.
 #[test]
 fn swap_metrics() {
-    // ScalingCounter impl is ~60 lines (struct + Partition impl), defined in
-    // this single test file, with zero compilation errors.
-    let loc = 60;
+    // Measure ScalingCounter LOC from the source file itself.
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let src = std::fs::read_to_string(
+        workspace_root.join("crates/fpa-testkit/tests/eval_replaceability.rs"),
+    )
+    .unwrap();
+    let start = src
+        .find("struct ScalingCounter")
+        .expect("should find struct");
+    let impl_end_marker = "// ===========================================================================";
+    let end = src[start..]
+        .find(impl_end_marker)
+        .map(|i| start + i)
+        .unwrap_or(src.len());
+    let loc = src[start..end].lines().count();
     let files_touched = 1;
     let compilation_errors = 0;
 
@@ -279,6 +294,7 @@ fn test_pyramid_shape() {
                 }
                 let content = std::fs::read_to_string(&path).unwrap();
                 tier_count += content.matches("#[test]").count();
+                tier_count += content.matches("#[tokio::test]").count();
             }
         }
         counts.push((tier_name, tier_count));

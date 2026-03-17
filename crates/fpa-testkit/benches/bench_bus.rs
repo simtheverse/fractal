@@ -16,7 +16,7 @@ fn bench_bus_throughput(c: &mut Criterion) {
         let mut reader = bus.subscribe::<SensorReading>();
         b.iter(|| {
             bus.publish(msg.clone());
-            let _ = reader.read();
+            std::hint::black_box(reader.read());
         });
     });
 
@@ -25,7 +25,7 @@ fn bench_bus_throughput(c: &mut Criterion) {
         let mut reader = bus.subscribe::<SensorReading>();
         b.iter(|| {
             bus.publish(msg.clone());
-            let _ = reader.read();
+            std::hint::black_box(reader.read());
         });
     });
 
@@ -34,7 +34,7 @@ fn bench_bus_throughput(c: &mut Criterion) {
         let mut reader = bus.subscribe::<SensorReading>();
         b.iter(|| {
             bus.publish(msg.clone());
-            let _ = reader.read();
+            std::hint::black_box(reader.read());
         });
     });
 
@@ -52,7 +52,7 @@ fn bench_type_erasure(c: &mut Criterion) {
         let mut reader = bus.subscribe::<SensorReading>();
         b.iter(|| {
             bus.publish(msg.clone());
-            let _ = reader.read();
+            std::hint::black_box(reader.read());
         });
     });
 
@@ -61,7 +61,7 @@ fn bench_type_erasure(c: &mut Criterion) {
         let mut reader = bus.subscribe::<SensorReading>();
         b.iter(|| {
             bus.publish(msg.clone());
-            let _ = reader.read();
+            std::hint::black_box(reader.read());
         });
     });
 }

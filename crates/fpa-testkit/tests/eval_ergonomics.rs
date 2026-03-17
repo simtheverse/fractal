@@ -42,10 +42,18 @@ fn boilerplate_new_partition() {
     // Sensor is the first partition in the file (roughly lines 1-164)
     println!("test_partitions.rs (Sensor+Follower+Recorder): {} LOC", tp_loc);
 
+    // Measure Sensor section LOC
+    let sensor_start = tp_src.find("pub struct Sensor").expect("should find Sensor");
+    let sensor_end = tp_src[sensor_start..].find("pub struct Follower")
+        .map(|i| sensor_start + i)
+        .unwrap_or(tp_src.len());
+    let sensor_loc = tp_src[sensor_start..sensor_end].lines().count();
+    println!("Sensor partition (bus-aware): {} LOC", sensor_loc);
+
     // Boilerplate summary
     println!("--- Boilerplate: new partition ---");
     println!("  Minimal (no bus):  ~{} LOC (Counter)", counter_loc);
-    println!("  Bus-aware:         ~164 LOC (Sensor section, approximate)");
+    println!("  Bus-aware:         ~{} LOC (Sensor section)", sensor_loc);
 }
 
 #[test]
@@ -56,20 +64,20 @@ fn boilerplate_new_message_type() {
     let msg_src = std::fs::read_to_string(&msg_path)
         .unwrap_or_else(|e| panic!("cannot read {}: {}", msg_path.display(), e));
     let msg_loc = msg_src.lines().count();
-    println!("messages.rs (5 message types): {} LOC", msg_loc);
-    // Each message type is roughly: struct (3-4 LOC) + impl Message (5 LOC) + doc comment (2-3 LOC) = ~12 LOC
-    println!("  Approximate LOC per message type: {}", msg_loc / 5);
+    let msg_type_count = msg_src.matches("impl Message for").count();
+    println!("messages.rs ({} message types): {} LOC", msg_type_count, msg_loc);
+    println!("  Approximate LOC per message type: {}", msg_loc / msg_type_count);
 }
 
 #[test]
 fn boilerplate_new_layer() {
     let root = workspace_root();
 
-    let nesting_test = root.join("crates/fpa-testkit/tests/fpa_033.rs");
+    let nesting_test = root.join("crates/fpa-compositor/tests/fpa_001_fractal.rs");
     let src = std::fs::read_to_string(&nesting_test)
         .unwrap_or_else(|e| panic!("cannot read {}: {}", nesting_test.display(), e));
     let loc = src.lines().count();
-    println!("fpa_033.rs (layer 0 + layer 1 nesting tests): {} LOC", loc);
+    println!("fpa_001_fractal.rs (3-layer nesting test): {} LOC", loc);
 
     // The compositor-as-partition setup (layer_1_compositor_as_partition) is roughly 30 lines
     println!("  Compositor-as-partition setup: ~30 LOC (inner + outer + init + tick loop)");

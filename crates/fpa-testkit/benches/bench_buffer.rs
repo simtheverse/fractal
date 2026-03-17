@@ -7,16 +7,17 @@ fn bench_buffer_swap(c: &mut Criterion) {
 
     for &n in &[10, 100, 1000] {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            let keys: Vec<String> = (0..n).map(|i| format!("p{}", i)).collect();
             let mut buf = DoubleBuffer::with_capacity(n);
             // Pre-fill the write buffer
-            for i in 0..n {
-                buf.write(&format!("p{}", i), toml::Value::Integer(i as i64));
+            for (i, key) in keys.iter().enumerate() {
+                buf.write(key, toml::Value::Integer(i as i64));
             }
             b.iter(|| {
                 buf.swap();
                 // Re-fill write buffer for next swap
-                for i in 0..n {
-                    buf.write(&format!("p{}", i), toml::Value::Integer(i as i64));
+                for (i, key) in keys.iter().enumerate() {
+                    buf.write(key, toml::Value::Integer(i as i64));
                 }
             });
         });
