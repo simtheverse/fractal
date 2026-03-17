@@ -10,7 +10,6 @@ use fpa_bus::{Bus, BusExt, BusReader, DeferredBus, InProcessBus, TypedReader};
 use fpa_contract::{DumpRequest, LoadRequest, Partition, PartitionError, StateContribution};
 use fpa_events::EventEngine;
 
-// Re-export SharedContext so downstream code importing from compositor::SharedContext still works.
 pub use fpa_contract::SharedContext;
 
 use crate::direct_signal::{DirectSignal, DirectSignalRegistry};
@@ -57,8 +56,6 @@ pub struct Compositor {
     bus: Arc<DeferredBus>,
     state_machine: StateMachine,
     double_buffer: DoubleBuffer,
-    /// Fallback partitions keyed by the ID of the partition they replace.
-    fallbacks: HashMap<String, Box<dyn Partition>>,
     tick_count: u64,
     /// Accumulated simulation time (sum of all dt values passed to run_tick).
     elapsed_time: f64,
@@ -88,6 +85,10 @@ pub struct Compositor {
     last_dump_result: Option<toml::Value>,
     /// Pending load request for Phase 1 processing (FPA-014, FPA-023).
     pending_load: Option<toml::Value>,
+    /// Non-fatal errors from best-effort operations (e.g., despawn shutdown).
+    /// These are detected and enriched per FPA-011 but not propagated because
+    /// the faulting partition is no longer part of the active composition.
+    lifecycle_warnings: Vec<PartitionError>,
     /// Bus reader for transition requests (FPA-006).
     transition_reader: TypedReader<TransitionRequest>,
     /// Bus reader for dump requests (FPA-023).
@@ -120,13 +121,13 @@ impl Compositor {
         let transition_reader = bus.subscribe::<TransitionRequest>();
         let dump_reader = bus.subscribe::<DumpRequest>();
         let load_reader = bus.subscribe::<LoadRequest>();
+        let partition_count = partitions.len();
         Self {
             id: "compositor".to_string(),
             partitions,
             bus,
             state_machine: StateMachine::new(),
-            double_buffer: DoubleBuffer::new(),
-            fallbacks: HashMap::new(),
+            double_buffer: DoubleBuffer::with_capacity(partition_count),
             tick_count: 0,
             elapsed_time: 0.0,
             event_engine: None,
@@ -142,6 +143,7 @@ impl Compositor {
             pending_dump: false,
             last_dump_result: None,
             pending_load: None,
+            lifecycle_warnings: Vec::new(),
             transition_reader,
             dump_reader,
             load_reader,
@@ -299,33 +301,6 @@ impl Compositor {
         &self.pending_requests
     }
 
-    /// Register a fallback partition for the given partition ID.
-    ///
-    /// If the primary partition faults during step(), the fallback will be
-    /// activated in its place and the compositor will continue without error.
-    ///
-    /// Returns an error if the fallback's `id()` does not match `partition_id`.
-    pub fn register_fallback(
-        &mut self,
-        partition_id: impl Into<String>,
-        fallback: Box<dyn Partition>,
-    ) -> Result<(), PartitionError> {
-        let partition_id = partition_id.into();
-        if fallback.id() != partition_id {
-            return Err(self.make_error(
-                &partition_id,
-                "register_fallback",
-                format!(
-                    "fallback id '{}' must match partition id '{}'",
-                    fallback.id(),
-                    partition_id,
-                ),
-            ));
-        }
-        self.fallbacks.insert(partition_id, fallback);
-        Ok(())
-    }
-
     /// Get the current execution state.
     pub fn state(&self) -> ExecutionState {
         self.state_machine.state()
@@ -378,15 +353,6 @@ impl Compositor {
             }
         }
 
-        // Initialize fallbacks too
-        for fallback in self.fallbacks.values_mut() {
-            let result = fault::safe_init(fallback.as_mut(), &self.timeout_config);
-            if let Err(e) = result.into_result() {
-                self.state_machine.force_state(ExecutionState::Error);
-                return Err(e.with_layer_depth(self.layer_depth));
-            }
-        }
-
         // Transition to Running
         self.state_machine
             .request_transition(TransitionRequest {
@@ -401,6 +367,16 @@ impl Compositor {
     /// Queue a lifecycle operation for processing in the next tick's Phase 1 (FPA-014).
     pub fn request_lifecycle_op(&mut self, op: LifecycleOp) {
         self.pending_lifecycle_ops.push(op);
+    }
+
+    /// Drain and return non-fatal lifecycle warnings (FPA-011).
+    ///
+    /// Lifecycle warnings are errors from best-effort operations like despawn
+    /// shutdown. They are detected and enriched with compositor context but not
+    /// propagated because the faulting partition is no longer part of the active
+    /// composition. Callers should inspect these after each tick.
+    pub fn drain_lifecycle_warnings(&mut self) -> Vec<PartitionError> {
+        std::mem::take(&mut self.lifecycle_warnings)
     }
 
     /// Queue a dump request for processing in the next tick's Phase 1 (FPA-014, FPA-023).
@@ -636,12 +612,14 @@ impl Compositor {
                 LifecycleOp::Despawn(id) => {
                     if let Some(pos) = self.partitions.iter().position(|p| p.id() == id) {
                         let mut removed = self.partitions.remove(pos);
-                        // Shutdown error is intentionally discarded: the partition
-                        // is being removed regardless, similar to Drop semantics.
-                        // A failing shutdown should not prevent despawn or poison
-                        // the compositor — the partition is already gone from the
-                        // active set by this point.
-                        let _ = fault::safe_shutdown(removed.as_mut(), &self.timeout_config);
+                        // Despawn shutdown is best-effort: the partition is already
+                        // removed from the active set, so a failing shutdown should
+                        // not prevent despawn or poison the compositor. The error is
+                        // recorded as a lifecycle warning for observability (FPA-011).
+                        let result = fault::safe_shutdown(removed.as_mut(), &self.timeout_config);
+                        if let Err(e) = result.into_result() {
+                            self.lifecycle_warnings.push(e.with_layer_depth(self.layer_depth));
+                        }
                     }
                 }
             }
@@ -748,49 +726,21 @@ impl Compositor {
     /// Phase 2 stepping loop, extracted so `run_tick` can guarantee deferred
     /// mode cleanup regardless of fault paths (FPA-014, FPA-011).
     fn run_phase2_stepping(&mut self, dt: f64) -> Result<(), PartitionError> {
-        // For multi-rate partitions, each partition steps `rate` times per outer
-        // tick with `dt / rate` per sub-step. If a partition faults mid-cycle and
-        // a fallback is registered, the fallback completes the remaining sub-steps.
         let mut i = 0;
         while i < self.partitions.len() {
             let partition_id = self.partitions[i].id().to_string();
             let rate = self.rate_config.get_rate(&partition_id);
             let sub_dt = dt / rate as f64;
 
-            for sub in 0..rate {
+            for _sub in 0..rate {
                 let step_result = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
 
                 if let Err(step_err) = step_result.into_result() {
-                    // Check for fallback
-                    if let Some(mut fallback) = self.fallbacks.remove(&partition_id) {
-                        // Step the fallback for the failed sub-step
-                        let fallback_result = fault::safe_step(fallback.as_mut(), sub_dt, &self.timeout_config);
-                        if let Err(fallback_err) = fallback_result.into_result() {
-                            self.state_machine.force_state(ExecutionState::Error);
-                            return Err(fallback_err.with_layer_depth(self.layer_depth));
-                        }
-
-                        // Replace the partition with the fallback
-                        self.partitions[i] = fallback;
-
-                        // Complete remaining sub-steps with the fallback
-                        for _remaining in (sub + 1)..rate {
-                            let r = fault::safe_step(self.partitions[i].as_mut(), sub_dt, &self.timeout_config);
-                            if let Err(e) = r.into_result() {
-                                self.state_machine.force_state(ExecutionState::Error);
-                                return Err(e.with_layer_depth(self.layer_depth));
-                            }
-                        }
-                        break;
-                    }
-
-                    // No fallback - transition to Error and propagate
                     self.state_machine.force_state(ExecutionState::Error);
                     return Err(step_err.with_layer_depth(self.layer_depth));
                 }
             }
 
-            // Collect output after all sub-steps (including fallback's remaining steps)
             let state = fault::safe_contribute_state(self.partitions[i].as_ref(), &self.timeout_config)
                 .map_err(|e| e.with_layer_depth(self.layer_depth))?;
             let envelope = StateContribution {

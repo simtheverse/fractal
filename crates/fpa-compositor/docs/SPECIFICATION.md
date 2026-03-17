@@ -9,7 +9,7 @@ Traces to: FPA-SRS-000, FPA-CON-000
 | FPA-006 | Shared state machine with single owner | Pending |
 | FPA-009 | Compositor runtime: lifecycle, bus, context, arbitration | Pending |
 | FPA-010 | Relay authority for inter-layer communication | Implemented |
-| FPA-011 | Fault handling with context and fallback | Pending |
+| FPA-011 | Fault handling with context and propagation | Pending |
 | FPA-012 | Recursive state contribution | Implemented |
 | FPA-013 | Direct signals bypass relay chain | Implemented |
 | FPA-014 | Double-buffered tick lifecycle | Pending |

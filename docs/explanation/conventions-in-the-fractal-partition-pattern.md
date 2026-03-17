@@ -29,17 +29,20 @@ choices that the pattern's structure supports particularly well.
 
 The compositor at each layer executes each tick as a three-phase lifecycle:
 
-1. **Pre-tick processing:** Process pending lifecycle operations (spawn, despawn, state
-   dump/load), assemble shared context from the previous tick's outputs, publish shared
-   context into the write buffer, and swap the read/write buffers.
+1. **Pre-tick processing:** Check for pending direct signals, process pending lifecycle
+   operations (spawn, despawn), process pending state dump/load requests, and swap the
+   read/write buffers.
 
 2. **Partition stepping:** Each partition reads inter-partition messages from the read
    buffer (previous tick's outputs) and writes its outputs to the write buffer (current
    tick's outputs). No partition observes another partition's current-tick output during
-   this phase.
+   this phase. The compositor checks for direct signals between each partition's step.
+   After all steps complete (the tick barrier), the compositor assembles shared context
+   from the current tick's partition outputs and publishes it on the bus.
 
-3. **Post-tick processing:** Evaluate event conditions, collect outputs, process bus
-   requests, and relay qualified requests to the outer bus.
+3. **Post-tick processing:** Evaluate event conditions against pre-step state, apply
+   triggered actions in TOML declaration order, process bus requests, relay qualified
+   requests to the outer bus, and check for direct signals.
 
 The key mechanism is double-buffering: partitions read from one buffer and write to
 another. The buffers are swapped between ticks. This means every partition sees a

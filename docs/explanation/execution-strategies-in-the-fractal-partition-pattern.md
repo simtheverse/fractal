@@ -83,9 +83,14 @@ Direct invocation is the right choice when:
 The tick lifecycle (FPA-014, defined in FPA-CON-000) is a specific direct-invocation
 strategy that adds a three-phase structure with double-buffered message isolation:
 
-- **Phase 1** assembles shared context, processes lifecycle operations, and swaps buffers.
-- **Phase 2** steps all partitions against the previous cycle's data.
-- **Phase 3** evaluates events, arbitrates requests, and relays messages.
+- **Phase 1** checks direct signals, processes lifecycle operations and dump/load
+  requests, and swaps buffers.
+- **Phase 2** steps all partitions against the previous cycle's data, checking for
+  direct signals between each step. After all steps complete (the tick barrier), the
+  compositor assembles shared context from the current tick's outputs and publishes it
+  on the bus.
+- **Phase 3** evaluates events, arbitrates requests, and relays qualified requests to
+  the outer bus.
 
 The double-buffer ensures that no partition sees another partition's current-cycle output
 during stepping — which makes the result independent of step order and enables safe
@@ -142,15 +147,17 @@ shifts from caller to supervisor.
 The compositor still:
 
 - **Controls lifecycle boundaries.** It tells partitions when they may start processing
-  (after initialization is complete and the bus is connected) and when they must stop
-  (shutdown). No partition begins or ends its processing loop without the compositor's
-  authorization. Note that under supervisory coordination, the synchronous `shutdown()`
-  method is a *signal*, not a *confirmation*: it instructs sub-partitions to stop but
-  does not guarantee they have stopped by the time it returns. The compositor detects
-  actual termination through the same mechanisms it uses for fault detection — heartbeat
-  expiry, connection state, or health messages. For confirmed shutdown with task join,
-  implementations may provide an async shutdown path outside the synchronous Partition
-  trait.
+  and when they must stop. No partition begins or ends its processing loop without the
+  compositor's authorization. Note that under supervisory coordination, the synchronous
+  `init()` and `shutdown()` methods are *signals*, not *confirmations*: `init()` spawns
+  sub-partition tasks but does not guarantee initialization has completed by the time it
+  returns; `shutdown()` instructs sub-partitions to stop but does not guarantee they have
+  stopped. This is inherent to the model — sub-partitions on separate tasks, processes,
+  or nodes cannot be synchronously joined through a synchronous trait method. The
+  compositor detects actual lifecycle completion through the same mechanisms it uses for
+  fault detection — heartbeat expiry, connection state, or health messages. A supervisory
+  compositor should provide async counterparts (e.g., `async_init()`, `async_shutdown()`)
+  that await sub-partition lifecycle completion and propagate faults per FPA-011.
 
 - **Owns the bus.** It publishes shared context, receives requests, and arbitrates shared
   state machines. Partitions interact with each other and with the compositor exclusively
@@ -160,7 +167,7 @@ The compositor still:
   monitors partitions through heartbeats, health messages, or connection state. A
   partition that stops publishing, misses a heartbeat deadline, or disconnects is
   considered faulted. The compositor applies the same fault handling policy (FPA-011):
-  propagate the error or activate a fallback.
+  propagate the error to the outer layer.
 
 - **Manages relay.** Inter-layer requests from self-scheduling partitions still flow
   through the bus, and the compositor still has relay authority (FPA-010) over what
@@ -210,10 +217,9 @@ compositor uses mechanisms such as:
   an internal failure. The compositor receives it through normal bus subscription.
 
 The fault handling policy is the same regardless of detection mechanism: the compositor
-logs the fault with diagnostic context (which partition, which layer) and either
-propagates the error to the outer layer or activates a configured fallback (FPA-011).
-The difference is latency — a fault under supervisory coordination may take longer to
-detect than one under direct invocation.
+logs the fault with diagnostic context (which partition, which layer) and propagates
+the error to the outer layer (FPA-011). The difference is latency — a fault under
+supervisory coordination may take longer to detect than one under direct invocation.
 
 ## How core mechanisms adapt
 
@@ -276,20 +282,19 @@ a freshly computed physics state and a stale one carried forward from a previous
 The difference affects whether the consumer should proceed normally, use interpolation or
 extrapolation, or flag a degraded-data condition.
 
-The compositor shall indicate data freshness as metadata accompanying its output on the
-outer bus (FPA-009). The freshness representation is defined in the contract crate
-alongside the output type. Possible representations include:
+The compositor communicates freshness through the `StateContribution` envelope — a
+wrapper defined in the contract crate that wraps all `contribute_state()` output with
+three fields:
 
-- **A cycle identifier or timestamp** indicating when the data was last computed.
-  Consumers compare against the current cycle to determine staleness.
-- **A freshness flag** (e.g., `Fresh` vs `Stale`) for simple binary decisions.
-- **An age metric** indicating how many outer-layer cycles have elapsed since the data
-  was last updated.
+- **`state`** — the contributed state data itself.
+- **`fresh`** — a boolean indicating whether the data was computed for the current
+  invocation (`true`) or carried forward from a previous cycle (`false`).
+- **`age_ms`** — elapsed time in milliseconds since the data was last computed.
+  Zero when fresh; nonzero when stale.
 
-The contract crate defines which representation is used and what the consumer's
-obligations are when it receives stale data. This is a contract-level concern, not a
-transport concern — freshness metadata travels with the typed message and is part of the
-interface specification.
+The `StateContribution` is the uniform envelope regardless of execution strategy. This
+is a contract-level concern, not a transport concern — freshness metadata travels with
+the typed message and is part of the interface specification.
 
 Under direct invocation with the tick lifecycle, data freshness is trivially `Fresh` for
 every cycle — the compositor computed it synchronously. The freshness metadata may be

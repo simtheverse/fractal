@@ -190,10 +190,11 @@ Atmosphere ──publishes──► AtmosphereState (LatestValue)
   loaded state must propagate correctly through the nested Aerodynamics
   compositor. Validates FPA-023 (load while idle).
 
-- **Fallback partition**: If Aerodynamics panics (numerical instability),
-  the layer 0 compositor activates a SimplifiedAero fallback that uses a
-  reduced model. The fallback completes the remaining sub-steps for that
-  tick. Validates FPA-011 (fault handling with fallback).
+- **Fault propagation**: If Aerodynamics panics (numerical instability),
+  the layer 0 compositor catches the panic, wraps it with diagnostic
+  context (which partition, which layer, which operation), and propagates
+  the error. The orchestrator decides the recovery strategy (e.g.,
+  restarting with a simplified model). Validates FPA-011 (fault handling).
 
 - **Direct signals**: A structural failure detection in Aerodynamics emits
   a direct signal ("structural_failure") that bypasses the relay policy
@@ -349,12 +350,11 @@ DataLogger subscribes to SharedContext (all partition states every tick)
   too generous for a 10ms tick budget. This challenges whether timeout
   constants should be in the spec or configurable.
 
-- **Fallback with identity**: If ControlLaw faults (numerical divergence),
-  a SafeControlLaw fallback activates. The fallback drives actuators to
-  safe positions (valves closed, heaters off). The fallback must have
-  the same partition ID and publish the same ActuatorCommands type.
-  The downstream ActuatorOutput doesn't know the switch happened.
-  Validates FPA-011 (fallback identity requirement).
+- **Fault-triggered safe state**: If ControlLaw faults (numerical
+  divergence), the compositor catches the fault and propagates it. The
+  orchestrator responds by transitioning to a safe state (valves closed,
+  heaters off) — recovery logic lives in the orchestrator, not the
+  compositor. Validates FPA-011 (fault propagation).
 
 - **Direct signals for safety**: SafetyInterlock detects an overpressure
   condition and emits a direct signal ("emergency_shutdown"). This signal
@@ -378,7 +378,7 @@ DataLogger subscribes to SharedContext (all partition states every tick)
 
 - **SafetyInterlock is independent**: SafetyInterlock must not depend on
   ControlLaw's output. It reads SensorReadings directly and makes its
-  own determination. If ControlLaw is in fallback or faulted, safety
+  own determination. If ControlLaw is faulted, safety
   checks continue unaffected. This validates that partitions are truly
   independent — the safety case depends on it.
 
@@ -413,7 +413,7 @@ being tested.
 | Network transport (real) | | **primary** | **primary** | **primary** |
 | Mixed transport per layer | | **primary** | | |
 | State dump/load | validates | **primary** | **primary** | **primary** |
-| Fallback partitions | | **primary** | | **primary** |
+| Fault propagation | | **primary** | | **primary** |
 | Direct signals | | validates | | **primary** |
 | Relay policy | | | | **primary** |
 | Drop-in replacement | **primary** | validates | **primary** | **primary** |

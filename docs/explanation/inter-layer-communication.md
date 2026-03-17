@@ -70,7 +70,7 @@ distinguished by purpose.
 
 The compositor drives execution by calling trait methods on each partition:
 
-- `init(config)` — initialize with configuration derived from composition fragments
+- `init()` — initialize the partition (configuration is handled at construction time)
 - `step(dt)` — advance one timestep
 - `shutdown()` — clean up resources
 - `contribute_state()` — request a state snapshot contribution
@@ -180,9 +180,7 @@ it may:
   external stop request).
 
 - **Suppress.** Handle the request internally without relaying. The compositor might
-  respond to a sub-partition failure by switching to a fallback implementation rather
-  than propagating a stop request. The outer layer never knows the internal event
-  occurred.
+  handle a request locally without exposing it to the outer layer.
 
 - **Aggregate.** Collect multiple requests from different sub-partitions within a single
   tick and relay a single consolidated request. This prevents the outer bus from seeing
@@ -230,21 +228,26 @@ exceeds the cost of breaking layer encapsulation.
 ### How direct signals work
 
 Direct signal types are declared in a contract crate. Any partition within that contract
-crate's hierarchy can emit a declared direct signal. The signal bypasses all intermediate
-bus instances within the hierarchy and reaches the declaring crate's orchestrator
-directly.
+crate's hierarchy can emit a declared direct signal. The signal bypasses the bus relay
+chain — it is not a bus message and is not subject to relay authority (FPA-010). Instead,
+each compositor collects direct signals from its inner compositors and filters them
+against its own signal registry.
 
 ```
 Layer 2 sub-partition emits DirectSignal::EmergencyStop
-  → bypasses layer 2 bus
-  → bypasses layer 1 bus
-  → reaches system orchestrator directly
+  → layer 2 compositor collects signal (bypasses layer 2 bus)
+  → layer 1 compositor collects signal, filters against its registry
+  → layer 0 orchestrator collects signal, filters against its registry
   → orchestrator applies emergency response
 ```
 
-The mechanism for bypass is implementation-specific — it might be a separate channel, a
-shared atomic, or a direct callback registered during initialization. The key property
-is that no compositor in the chain can intercept or suppress it.
+Each compositor maintains a signal registry defining which direct signal types are
+recognized at its layer. When collecting signals from inner compositors, the outer
+compositor filters against its own registry — only signals whose type identifier is
+registered at the outer layer propagate. Unregistered signals are silently dropped at
+the boundary. The key property is that signals bypass bus relay authority: no compositor
+can suppress a registered signal through relay policy the way it can suppress a bus
+message.
 
 ### Direct signals are hierarchy-scoped
 
@@ -369,20 +372,25 @@ a bus concern. There is no fault-specific infrastructure.
 Fault handling is one of several compositor roles described in
 [The Compositor in the Fractal Partition Pattern](the-compositor-in-the-fractal-partition-pattern.md).
 
-When a sub-partition faults (detected via a failed call, a missed heartbeat, or a
-disconnection depending on the execution strategy), the compositor decides the response:
+When a sub-partition faults during any lifecycle invocation — including `step()`,
+`init()`, `shutdown()`, `contribute_state()`, and `load_state()` — detected via a
+returned error, a panic, or a timeout, the compositor propagates the error to the outer
+layer by returning an error from its own trait method call, which cascades through the
+compositor chain until the orchestrator receives it. The error includes context
+identifying the faulting sub-partition's identity, layer depth, and the operation that
+faulted. The compositor transitions to Error state before returning.
 
-- **Emit a stop request.** The compositor emits a stop request on its bus (which may
-  then be relayed to the outer layer through the normal relay chain). The outer layer
-  sees a stop request from the partition, not a raw fault from a sub-partition.
+The compositor's fault handling responsibility is detect, enrich, propagate. The one
+exception is despawn shutdown: when a partition is being removed, a shutdown fault is
+recorded as a non-fatal warning rather than propagated, because the partition is already
+gone from the active composition (analogous to Drop semantics). Recovery from faults —
+such as activating a fallback implementation or retrying — is the responsibility of the
+partition itself or the orchestrator, not the compositor.
 
-- **Fall back.** If an alternative implementation is available, the compositor might
-  switch to it and continue execution. The outer layer never knows the primary
-  implementation faulted.
-
-- **Log and continue.** For non-fatal errors — a sub-partition reporting a degraded
-  result, a recoverable timeout — the compositor may log the fault and proceed. The
-  outer layer sees no change in behavior.
+The compositor enforces per-invocation elapsed-time deadlines for all lifecycle calls.
+Default values are 50 ms for step/contribute_state and 500 ms for
+init/load_state/shutdown. Domains configure values appropriate to their timing
+constraints. Deadline enforcement cannot be disabled.
 
 ### Why faults are not a bus concern
 
@@ -392,15 +400,10 @@ unnecessary because:
 
 - The compositor already has a direct call-and-return relationship with its
   sub-partitions. It catches errors from `step()` as a normal part of execution.
-- The compositor's response to a fault is a domain decision (stop? fall back? continue?),
-  not a routing decision. It belongs in the compositor's logic, not in bus infrastructure.
-- The outer layer should see the compositor's *decision*, not the raw fault. This is the
-  same encapsulation principle that governs relay authority.
-
-If richer fault context is needed at the outer layer — for diagnostics, logging, or
-operator display — the compositor can include fault details in the payload of its stop
-request or publish a diagnostic message on the outer bus. The mechanism is the existing
-typed message system, not a new fault channel.
+- The compositor's response to a fault is error propagation via the return path.
+  It belongs in the compositor's logic, not in bus infrastructure.
+- The outer layer should see the compositor's error return, not the raw fault. This is
+  the same encapsulation principle that governs relay authority.
 
 ## Design choices and tradeoffs
 

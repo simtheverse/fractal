@@ -29,6 +29,17 @@ impl DoubleBuffer {
         }
     }
 
+    /// Create a new double buffer with pre-reserved capacity for the expected
+    /// number of partitions. Avoids reallocation during the first two ticks.
+    /// After that, `HashMap::clear()` retains capacity so no re-reservation
+    /// is needed.
+    pub fn with_capacity(partition_count: usize) -> Self {
+        Self {
+            read: HashMap::with_capacity(partition_count),
+            write: HashMap::with_capacity(partition_count),
+        }
+    }
+
     /// Read the output that the given partition produced during the previous tick.
     ///
     /// Returns `None` if the partition did not produce output last tick

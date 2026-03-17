@@ -16,8 +16,12 @@ state. The buffer swap at the start of each tick makes the previous tick's
 writes available for reading.
 
 This path is:
-- **Direct memory access** — no allocation, no serialization, no bus involvement.
-- **Zero overhead per message** — the compositor writes to a pre-allocated slot.
+- **Low overhead** — uses a capacity-reserved `HashMap<String, toml::Value>`,
+  sized to the partition count at construction to avoid reallocation. No bus
+  involvement, no per-subscriber cloning, no type erasure.
+- **One insert per partition per tick** — the compositor inserts each partition's
+  contributed state into the write buffer after stepping. The write buffer is
+  cleared on each swap.
 - **Deterministic** — step order does not affect results because readers always
   see the previous tick's state.
 
@@ -101,17 +105,15 @@ Rust pattern (similar to how `Any` works). The key properties:
    and `bus.subscribe::<M>()` regardless of the underlying transport. No
    transport-specific imports or branches in partition code.
 
-2. **Runtime transport selection** — the compositor can choose transport from
-   configuration at startup. One binary supports all transport modes.
-   *Note: the bus layer supports this today; the compositor currently holds a
-   concrete `InProcessBus` and will be updated to accept `Box<dyn Bus>` in
-   Phase 4 Track M2.*
+2. **Runtime transport selection** — the compositor accepts `Arc<dyn Bus>` at
+   construction, enabling transport selection from configuration at startup.
+   One binary supports all transport modes.
 
 3. **Compile-time type safety** — `BusExt::publish<M>` and
    `BusExt::subscribe<M>` are fully generic. Type mismatches are caught at
    compile time. The type erasure is internal infrastructure, invisible to
    partition authors.
 
-4. **Mixed transports per layer** — once compositors accept `Box<dyn Bus>`
-   (Phase 4 Track M2), different layers can use different transports in the
-   same run (e.g., network at layer 0, in-process at layer 1).
+4. **Mixed transports per layer** — because compositors accept `Arc<dyn Bus>`,
+   different layers can use different transports in the same run (e.g., network
+   at layer 0, in-process at layer 1).

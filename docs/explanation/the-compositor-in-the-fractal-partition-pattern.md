@@ -29,16 +29,19 @@ at one scale participates as a peer at the next scale up.
 
 ## Role 1: Assembly
 
-At startup, the compositor reads composition fragments (FPA-020, FPA-021) to determine
-which partition implementations to instantiate at its layer. A layer 0 orchestrator reads
-a session fragment and selects top-level partitions. A layer 1 compositor reads a scenario
-fragment and selects sub-partitions. The mechanism is the same at every layer — named
-composition fragments with inheritance and override semantics.
+At startup, the compositor reads composition fragments (FPA-019, FPA-020, FPA-021) to
+determine which partition implementations to instantiate at its layer. A layer 0
+orchestrator reads a layer 0 composition fragment and selects top-level partitions. A
+layer 1 compositor reads a layer 1 composition fragment and selects sub-partitions. The
+mechanism is the same at every layer — composition fragments with inheritance and
+override semantics. Assembly uses the standard composition entry point (FPA-015), which
+accepts a composition fragment, a partition registry mapping implementation names to
+constructors, and a bus instance.
 
 The compositor resolves `extends` chains, applies inline overrides, and instantiates the
-selected implementations. It connects each partition to the layer's bus and verifies that
-all contract dependencies are satisfied. Assembly is complete before any runtime
-processing begins.
+selected implementations via registry lookup. It connects each partition to the layer's
+bus and verifies that all contract dependencies are satisfied. Assembly is complete before
+any runtime processing begins.
 
 This role is the least controversial — most component frameworks have an assembly phase.
 What distinguishes FPA is that the assembly mechanism is uniform across layers: the same
@@ -102,10 +105,11 @@ coordination variable, trigger a phase change — it emits a typed request on th
 compositor receives the request, evaluates it against the state machine's transition
 rules, and applies or rejects it.
 
-Single-owner arbitration prevents conflicting mutations. If two partitions request
-conflicting transitions in the same processing cycle, the compositor resolves the
-conflict using a deterministic priority rule defined in the contract crate. All requests
-and resolutions are logged, providing an audit trail.
+Single-owner arbitration prevents conflicting mutations. The compositor evaluates each
+request against the state machine's transition rules and applies or rejects it. When
+multiple requests arrive in the same processing cycle, they are processed sequentially
+using a deterministic, transport-independent rule defined by the domain-specific
+specification. All requests and resolutions are logged, providing an audit trail.
 
 The arbitration pattern is the same at every layer. At layer 0, the orchestrator
 arbitrates system-level state machines. At layer 1, a partition's compositor arbitrates
@@ -124,8 +128,7 @@ relay gateway (FPA-010). It has full authority over what crosses its layer bound
 - **Transform.** Modify the request before relaying — add context, change the request
   type, convert an internal warning into an external stop request.
 - **Suppress.** Handle the request internally without forwarding. The compositor might
-  respond to a sub-partition failure by switching to a fallback rather than propagating
-  the failure outward.
+  handle a request locally without exposing it to the outer layer.
 - **Aggregate.** Combine multiple requests from a single processing cycle into one
   consolidated message on the outer bus.
 
@@ -137,28 +140,33 @@ for the full relay chain treatment.
 
 ## Role 6: Fault handler
 
-When a sub-partition faults — by returning an error, panicking, timing out, missing a
-heartbeat, or disconnecting — the compositor catches the fault, adds diagnostic context
-(which partition, which layer, which operation), and responds (FPA-011).
+When a sub-partition faults during any lifecycle invocation — `init()`, `step()`,
+`shutdown()`, `contribute_state()`, or `load_state()` — by returning an error, panicking,
+or timing out, the compositor catches the fault, adds diagnostic context (which partition,
+which layer, which operation), and responds (FPA-011).
 
-The response follows a priority order:
+The compositor propagates the error to the outer layer by returning an error from its own
+lifecycle method call, cascading through the compositor chain to the orchestrator. The
+compositor transitions to Error state before returning.
 
-1. **Propagate.** Return an error from the compositor's own lifecycle method, cascading
-   through the compositor chain to the orchestrator. This is the default when no fallback
-   is configured.
-2. **Fallback.** If a fallback implementation is configured for the faulting partition,
-   switch to it, log the fault and fallback activation, and continue processing. The
-   outer layer does not see an error, but the fault is recorded.
+The compositor enforces per-invocation elapsed-time deadlines for all lifecycle calls.
+Default values are 50 ms for step/contribute_state and 500 ms for
+init/load_state/shutdown; domains configure values appropriate to their constraints.
+Deadline enforcement cannot be disabled.
 
 The fault detection mechanism varies by execution strategy. Under direct invocation, the
-compositor catches errors and panics from the call itself, and enforces per-invocation
-timeouts. Under supervisory coordination, the compositor detects faults through heartbeat
-monitoring, connection state, or error messages on the bus. The fault handling policy is
-the same regardless of detection mechanism — only the detection latency differs.
+compositor catches errors and panics from the call itself and enforces deadlines. Under
+supervisory coordination, the compositor detects faults through heartbeat monitoring,
+connection state, or error messages on the bus. The fault handling policy is the same
+regardless of detection mechanism — only the detection latency differs.
 
-The compositor never silently absorbs a fault. Every fault is logged with full diagnostic
-context, and the compositor either propagates it or activates a configured fallback.
-There is no third option.
+The compositor never silently absorbs a fault. Every fault is detected and enriched with
+full diagnostic context. Faults during active lifecycle operations are propagated to the
+outer layer. The one exception is despawn shutdown: when a partition is being removed, a
+shutdown fault is recorded as a non-fatal warning rather than propagated, because the
+partition is already gone from the active composition. Recovery from faults — such as
+activating a fallback or retrying — is the responsibility of the partition itself or the
+orchestrator.
 
 ## Role 7: Partition on the outer layer
 
@@ -192,15 +200,15 @@ compositor at the boundary translates.
 
 When the inner strategy produces output asynchronously, the compositor's output may
 reflect previously computed state rather than state computed for the current invocation.
-The compositor communicates this through **freshness metadata** — information accompanying
-its output that indicates whether the data was freshly computed or carried forward. The
-freshness representation (cycle identifier, timestamp, staleness flag, age metric) is
-defined in the contract crate alongside the output type.
+The compositor communicates this through the **StateContribution** envelope — a wrapper
+defined in the contract crate that wraps all `contribute_state()` output with freshness
+metadata: the `state` itself, a `fresh` flag indicating whether it was computed for the
+current invocation, and an `age_ms` field indicating how stale the data is.
 
 Consumers read the freshness metadata and decide how to handle stale data — proceed
 normally, interpolate, or flag a degraded condition. Under uniform lock-step execution,
-freshness is trivially "fresh" every cycle and the metadata may be omitted or always set
-to fresh. It becomes meaningful at layer boundaries where strategies diverge.
+freshness is trivially "fresh" every cycle. It becomes meaningful at layer boundaries
+where strategies diverge.
 
 See
 [Execution Strategies in the Fractal Partition Pattern](execution-strategies-in-the-fractal-partition-pattern.md)
@@ -223,8 +231,8 @@ decides whether to relay it outward. The arbitration result (applied, rejected, 
 pending) may influence the relay decision.
 
 **Fault handling interacts with lifecycle and relay.** A fault detected during a lifecycle
-invocation may trigger a fallback (lifecycle), an error propagation (relay to the outer
-layer), or both. The compositor's fault handling policy determines which path is taken.
+invocation triggers error propagation to the outer layer. The compositor detects, enriches,
+and propagates — it does not attempt recovery.
 
 **The outer-partition role constrains all other roles.** The compositor must satisfy its
 outer contract. Its lifecycle coordination, bus management, arbitration, relay, and fault

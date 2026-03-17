@@ -174,14 +174,13 @@ partition lifecycle calls (init, step, shutdown, contribute_state, load_state).
 **Violation:** A partition panic crashes the compositor. An error from step()
 is silently ignored. A timeout is not detected.
 
-### 5.2 Fallback activation (FPA-011)
-**Principle:** If a fallback is registered for a partition, the compositor
-activates it on fault. The fallback must have the same partition ID. The
-downstream partitions don't know the switch happened.
+### 5.2 Fault propagation (FPA-011)
+**Principle:** When a sub-partition faults, the compositor propagates the error
+to the outer layer. Recovery (fallback, retry) is the responsibility of the
+partition itself or the orchestrator, not the compositor.
 
-**Violation:** A fallback has a different partition ID than the primary. The
-compositor propagates an error despite having a registered fallback. Downstream
-partitions must be modified to work with the fallback.
+**Violation:** The compositor silently absorbs a fault. The compositor attempts
+recovery logic (e.g., activating a fallback) instead of propagating.
 
 ### 5.3 Direct signals (FPA-013)
 **Principle:** Safety-critical signals bypass the relay chain within the

@@ -20,14 +20,18 @@ The defining property — the **layer and partition uniformity principle** — i
 same structural primitives appear at every layer:
 
 - **Contracts** define what a partition must provide and what it may consume.
-- **Compositors** select and assemble partition implementations at startup.
 - **Events** are defined, armed, and triggered using the same schema at every layer.
-- **Composition fragments** configure partition selections using the same TOML format,
-  override semantics, and inheritance rules at every scope.
+- **Configuration** and **composition fragments** configure partition selections using
+  the same TOML format, override semantics, and inheritance rules at every scope.
 - **Specifications** follow the same requirement format with bidirectional traceability
   to the layer above.
 - **Documentation** follows the same Diátaxis structure at every partition.
 - **Testing** follows the same contract test / compositor test structure at every layer.
+
+The compositor at each layer applies these primitives: it selects and assembles
+partition implementations, coordinates their lifecycle at runtime (init, step,
+shutdown), owns the layer's bus, arbitrates requests, relays inter-layer messages,
+and handles faults.
 
 The pattern is called "fractal" because zooming into any partition reveals the same
 structure as the system as a whole, and zooming out reveals that the system itself is a
@@ -71,26 +75,26 @@ rather than being engineered into the system.
 
 ### Configuration collapses to one concept
 
-Sessions, scenarios, entity definitions, and partition presets are all **composition
-fragments** — TOML blocks that select partition implementations at some
-scope. They all support the same `extends` inheritance, the same inline override
-semantics, and the same named-reference resolution. A session is a composition fragment
-at layer 0 that references scenario fragments at layer 1. A scenario is a composition
-fragment that references entity and partition fragments at narrower scopes.
+At every scope — system-level run definitions, partition selections, sub-partition
+presets, initial conditions — the configuration mechanism is the same: **composition
+fragments**. These are TOML blocks that select partition implementations at some scope.
+They all support the same `extends` inheritance, the same inline override semantics, and
+the same named-reference resolution. A composition fragment at layer 0 references
+fragments at layer 1. A fragment at layer 1 references fragments at narrower scopes.
 
 An outer-layer fragment can override any field defined by an inner-layer fragment it
-composes. This means a session file can fully define all scenario content inline —
+composes. This means a layer 0 fragment can fully define all layer 1 content inline —
 useful for simple cases or self-contained examples — or it can reference separate
-scenario files and override only the parameters relevant to a specific run. The same
-mechanism works at every scope: a scenario can override individual sub-model selections
-within a partition preset, an entity definition can override specific initial conditions
-from a template.
+fragments and override only the parameters relevant to a specific run. The same mechanism
+works at every scope: a layer 1 fragment can override individual sub-partition selections
+within a preset, an initial-conditions fragment can override specific values from a
+template.
 
 ### Events work everywhere
 
 The event system — time-triggered, condition-triggered, declaratively defined in TOML —
 is the same at every layer. A system-level event that pauses execution at wall-clock T+30s
-uses the same schema as a partition B event that fires a mode transition at scenario time
+uses the same schema as a partition B event that fires a mode transition at logical time
 T+60s, which uses the same schema as a partition A event that halts execution when a
 monitored value exceeds a threshold.
 
@@ -116,7 +120,8 @@ the contract-crate-scoped semantic content.
 ### Documentation and specifications propagate
 
 Each partition maintains a `docs/` directory with the same Diátaxis quadrants (tutorials,
-how-to, reference, explanation, design) and a `SPECIFICATION.md` with the same format.
+how-to, reference, explanation) plus a `design/` directory for specifications and design
+artifacts, and a `SPECIFICATION.md` with the same format.
 A contributor navigating from a system-level partition into one of its sub-partitions
 finds the same documentation layout, the same specification structure, and
 the same traceability conventions. Specifications at each layer nucleate specifications
@@ -253,7 +258,7 @@ A flat plugin system (everything is a plugin at one level) avoids the complexity
 layers but sacrifices the ability to reason about scope and override direction.
 Configuration override semantics depend on knowing which scope is "outer" and which is
 "inner" — a session overrides a scenario, not the reverse. Event time semantics depend
-on knowing which layer you are at — wall-clock at layer 0, scenario time at layer 1.
+on knowing which layer you are at — wall-clock at layer 0, logical time at layer 1.
 The layer concept makes these relationships explicit.
 
 ### Why not enforce a fixed depth
