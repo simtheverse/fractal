@@ -262,8 +262,9 @@ fn contract_tests_no_peer_instantiation() {
     assert!(checked > 0, "should have checked at least one contract test file");
 }
 
-/// Count #[test] in each tier and verify the pyramid shape:
-/// contract >= system (more unit tests than integration tests).
+/// Count #[test] in spec-linked test files (fpa_*.rs) in each tier and verify
+/// the pyramid shape: contract >= system. Eval tests (eval_*.rs) are excluded
+/// as they are meta-tests about the framework, not spec requirement tests.
 #[test]
 fn test_pyramid_shape() {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

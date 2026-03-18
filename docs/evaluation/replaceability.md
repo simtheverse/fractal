@@ -5,8 +5,9 @@ Evaluation of FPA's drop-in replaceability guarantees and test isolation propert
 ## 6P.1 — Swap Experiment Results
 
 A `ScalingCounter` partition was implemented in the eval test file using only `fpa_contract`
-types. It counts steps and applies a configurable scale factor, storing raw count and scale
-in state for clean roundtrip.
+types. It counts steps and stores a configurable scale factor, exercising a richer state
+shape (count + scale) than Counter to verify `contribute_state`/`load_state` roundtrip
+fidelity with heterogeneous fields.
 
 | Impl            | LOC (measured) | Files touched | Compile errors | Contract pass | Compositor pass |
 |-----------------|----------------|---------------|----------------|---------------|-----------------|

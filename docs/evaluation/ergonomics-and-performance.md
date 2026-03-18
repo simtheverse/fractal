@@ -14,10 +14,10 @@ All LOC values measured from source at test time.
 | New message type | ~14 per type | 1 (messages.rs, 73 LOC for 5 types) |
 | New layer (compositor-as-partition) | ~30 | 0 (inline setup in 112-line nesting test) |
 
-Boilerplate is dominated by the `Partition` trait's five required methods
-(`id`, `init`, `step`, `shutdown`, `contribute_state`) plus the optional
-`load_state`. Bus-aware partitions add subscription setup and state serialization
-for bus-specific fields but introduce no new concepts.
+Boilerplate is dominated by the `Partition` trait's six required methods
+(`id`, `init`, `step`, `shutdown`, `contribute_state`, `load_state`).
+Bus-aware partitions add subscription setup and state serialization for
+bus-specific fields but introduce no new concepts.
 
 ## 6R.2 — Performance Benchmarks
 

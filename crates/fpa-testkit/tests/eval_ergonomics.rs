@@ -65,6 +65,7 @@ fn boilerplate_new_message_type() {
         .unwrap_or_else(|e| panic!("cannot read {}: {}", msg_path.display(), e));
     let msg_loc = msg_src.lines().count();
     let msg_type_count = msg_src.matches("impl Message for").count();
+    assert!(msg_type_count > 0, "messages.rs should contain at least one Message impl");
     println!("messages.rs ({} message types): {} LOC", msg_type_count, msg_loc);
     println!("  Approximate LOC per message type: {}", msg_loc / msg_type_count);
 }
