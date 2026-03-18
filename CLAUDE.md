@@ -9,7 +9,7 @@ uniform structural primitives. The prototype exists to stress-test the FPA speci
 findings against the spec, and improve it through implementation experience.
 
 This prototype is also intended to bootstrap real FPA applications. Code quality, API design,
-and architectural decisions should be production-grade, not throwaway.
+and architectural decisions should be production-grade, not throwaway. This is meant to be the gold standard for FPA applications.
 
 ## Relationship to the spec
 
